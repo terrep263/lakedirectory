@@ -1,0 +1,1543 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// COUNTY SYSTEM BOUNDARY MODULE (Foundational)
+// =============================================================================
+// County is the HARD SYSTEM BOUNDARY. All data, operations, and visibility
+// are scoped to a single County. No cross-county data access is permitted.
+//
+// Rules:
+// - Counties are created by SUPER_ADMIN only
+// - Counties may be disabled but NEVER deleted
+// - County IDs are immutable
+// - Every core entity MUST include countyId
+// =============================================================================
+
+// County launch status enum for the New County Launch Playbook
+// Status transitions: DRAFT → LIVE_SOFT → LIVE_PUBLIC
+// No backwards transitions are permitted
+enum CountyLaunchStatus {
+  DRAFT        // County created, not publicly visible
+  LIVE_SOFT    // Soft launch: public browsing, no marketing
+  LIVE_PUBLIC  // Full public launch with all features
+}
+
+// =============================================================================
+// BUSINESS CORE ENUMS (Ingestion + Lifecycle)
+// =============================================================================
+// Lowercase values are mapped to keep API payloads lowercase while using
+// Prisma enum safety in code.
+// =============================================================================
+
+enum BusinessSource {
+  GOOGLE   @map("google")
+  MANUAL   @map("manual")
+}
+
+enum BusinessClaimState {
+  CLAIMED    @map("claimed")
+  UNCLAIMED  @map("unclaimed")
+}
+
+enum BusinessLifecycleState {
+  ACTIVE    @map("active")
+  INACTIVE  @map("inactive")
+  ARCHIVED  @map("archived")
+}
+
+enum BusinessRefreshStatus {
+  NOT_RUN
+  OK
+  INCOMPLETE
+  VERIFICATION_FAILED
+  MANUAL_REVIEW
+}
+
+enum RefreshJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  PAUSED
+}
+
+enum RefreshOutcome {
+  NOT_RUN
+  REFRESHED
+  UPDATED
+  UNCHANGED
+  INCOMPLETE
+  VERIFICATION_FAILED
+  MANUAL_REVIEW
+}
+
+model County {
+  id        String   @id @default(uuid())
+  name      String   // e.g., "Lake County"
+  state     String   // e.g., "FL"
+  slug      String   @unique // e.g., "lake-county"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Launch status for the New County Launch Playbook
+  // Controls visibility and feature enablement
+  launchStatus CountyLaunchStatus @default(DRAFT)
+
+  // Google Places configuration (county-scoped)
+  googlePlacesConfig Json?
+
+  // Boundary geometry for Places ingestion (GeoJSON polygon)
+  boundaryGeometry Json?
+
+  // Launch configuration flags (set during launch process)
+  citiesConfigured      Boolean @default(false)  // Phase 2 complete
+  placesIngested        Boolean @default(false)  // Phase 3 complete
+  adminVerified         Boolean @default(false)  // Phase 4 complete
+  vendorClaimsEnabled   Boolean @default(false)  // Phase 6 enabled
+  featuredContentEnabled Boolean @default(false) // Phase 7 enabled
+
+  // Relations to county-scoped entities
+  businesses       Business[]
+  deals            Deal[]
+  vouchers         Voucher[]
+  redemptions      Redemption[]
+  purchases        Purchase[]
+  voucherValidations VoucherValidation[]
+  founderStatuses  FounderStatus[]
+  featuredContent  FeaturedContent[]
+  adminActionLogs  AdminActionLog[]
+  adminEscalations AdminEscalation[]
+  adminCountyAccess AdminCountyAccess[]
+  bulkImportJobs   BulkImportJob[]
+  shareEvents      ShareEvent[]
+  rewardEvents     RewardEvent[]
+
+  // Geographic Context Module: Domain mappings and cities
+  domains CountyDomain[]
+  cities  City[]
+
+  // Launch audit log
+  launchLogs CountyLaunchLog[]
+
+  @@index([slug])
+  @@index([isActive])
+  @@index([state])
+  @@index([launchStatus])
+}
+
+// =============================================================================
+// NEW COUNTY LAUNCH PLAYBOOK: Launch Audit Log
+// =============================================================================
+// Tracks all phase completions and status transitions during county launch.
+// This log is immutable - entries are never deleted or modified.
+// =============================================================================
+
+model CountyLaunchLog {
+  id        String   @id @default(uuid())
+  countyId  String
+  phase     String   // e.g., "PHASE_1", "PHASE_2", etc.
+  action    String   // e.g., "DOMAIN_PROVISIONED", "CITIES_CONFIGURED"
+  status    String   // "SUCCESS" | "FAILED" | "SKIPPED"
+  metadata  Json?    // Additional context for the action
+  adminId   String?  // Admin who performed the action
+  createdAt DateTime @default(now())
+
+  county County @relation(fields: [countyId], references: [id])
+
+  @@index([countyId])
+  @@index([phase])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// GEOGRAPHIC CONTEXT MODULE: Domain-to-County Resolution
+// =============================================================================
+// County is resolved from request domain. This is the ONLY mechanism.
+// No cookies, paths, or query params for county resolution.
+// Domain → County mapping is authoritative.
+// =============================================================================
+
+model CountyDomain {
+  id        String   @id @default(uuid())
+  domain    String   @unique // e.g., "lakecountylocal.com"
+  countyId  String
+  isPrimary Boolean  @default(false) // Primary domain for this county
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  county County @relation(fields: [countyId], references: [id])
+
+  @@index([domain])
+  @@index([countyId])
+  @@index([isActive])
+}
+
+// =============================================================================
+// GEOGRAPHIC CONTEXT MODULE: City (Human-Anchored Municipalities)
+// =============================================================================
+// Cities are the only valid geographic units in the system.
+// Each county maintains a curated list of up to ~15 major municipalities.
+// Cities are treated as schema, not content.
+//
+// Rules:
+// - Cities are created and managed by ADMIN only
+// - Cities may be deactivated but NEVER deleted
+// - No free-text city entry is permitted
+// - Out of scope: unincorporated areas, neighborhoods, ZIP aliases
+// =============================================================================
+
+model City {
+  id           String   @id @default(uuid())
+  countyId     String
+  name         String   // e.g., "Leesburg"
+  slug         String   // e.g., "leesburg"
+  isActive     Boolean  @default(true)
+  displayOrder Int      @default(0) // For UI ordering
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relation to county
+  county County @relation(fields: [countyId], references: [id])
+
+  // Relation to businesses in this city
+  businesses Business[]
+  
+  // Relation to bulk import jobs
+  bulkImportJobs BulkImportJob[]
+
+  // Unique constraint: slug must be unique within a county
+  @@unique([countyId, slug])
+  @@index([countyId])
+  @@index([isActive])
+  @@index([displayOrder])
+}
+
+// Admin-County access binding (admins can have access to multiple counties)
+model AdminCountyAccess {
+  id        String   @id @default(uuid())
+  adminId   String
+  countyId  String
+  grantedAt DateTime @default(now())
+  grantedBy String?  // SUPER_ADMIN who granted access
+
+  admin  UserIdentity @relation("AdminCountyAccess", fields: [adminId], references: [id])
+  county County       @relation(fields: [countyId], references: [id])
+
+  @@unique([adminId, countyId])
+  @@index([adminId])
+  @@index([countyId])
+}
+
+model Account {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String?
+  fullName        String?
+  phone           String?
+  emailVerified   Boolean   @default(false)
+  emailVerifiedAt DateTime?
+  phoneVerified   Boolean   @default(false)
+  phoneVerifiedAt DateTime?
+  role            Role
+  createdAt       DateTime  @default(now())
+
+  business       Business?       @relation("BusinessOwner")
+  claims         BusinessClaim[] @relation("ClaimApplicant")
+  reviewedClaims BusinessClaim[] @relation("ClaimReviewer")
+  vouchers       Voucher[]
+}
+
+// =============================================================================
+// BUSINESS CORE (Independent Domain Entity)
+// =============================================================================
+// Canonical business record used for ingestion and manual admin creation.
+// No ownership, permissions, or claims logic is encoded here.
+// =============================================================================
+model BusinessCore {
+  id                   String                   @id @default(uuid())
+  name                 String
+  normalizedName       String
+  streetAddress        String
+  city                 String
+  state                String
+  postalCode           String
+  latitude             Float?
+  longitude            Float?
+  phone                String?
+  primaryCategory      String
+  secondaryCategories  String[]                @default([])
+  googlePlaceId        String?                 @unique
+  rating               Float?
+  reviewCount          Int?
+  hours                Json?
+  isOpen               Boolean?
+
+  source              BusinessSource
+  claimState          BusinessClaimState
+  lifecycleState      BusinessLifecycleState   @default(ACTIVE)
+  primaryImagePath    String
+  importBatchId       String?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  deletedAt           DateTime?
+
+  // Relations
+  auditLogs           BusinessAuditLog[]
+
+  // Indexes for deduplication and query performance
+  @@unique([normalizedName, city, state, postalCode])
+  @@index([latitude, longitude])
+  @@index([claimState])
+  @@index([lifecycleState])
+  @@index([source])
+}
+
+// Import batches and results for Google Places ingestion
+model BusinessImportLog {
+  id             String            @id @default(uuid())
+  importBatchId  String
+  source         BusinessSource
+  startedAt      DateTime          @default(now())
+  completedAt    DateTime?
+  location       Json?
+  category       String?
+  keyword        String?
+  radiusMeters   Int?
+  limit          Int?
+  createdCount   Int               @default(0)
+  skippedCount   Int               @default(0)
+  errorMessage   String?
+  params         Json?
+
+  @@index([importBatchId])
+  @@index([source])
+  @@index([startedAt])
+}
+
+// Audit log for sensitive business field edits
+model BusinessAuditLog {
+  id           String      @id @default(uuid())
+  businessId   String
+  changedById  String?
+  changedAt    DateTime    @default(now())
+  changedFields String[]
+  before       Json?
+  after        Json?
+
+  business     BusinessCore @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([changedAt])
+}
+
+model Business {
+  id                      String   @id @default(cuid())
+  name                    String
+  isVerified              Boolean  @default(false)
+  monthlyVoucherAllowance Int?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt @default(now())
+  ownerId                 String?  @unique
+
+  // ==========================================================================
+  // COUNTY SYSTEM BOUNDARY (Required for new records)
+  // ==========================================================================
+  // Every Business MUST belong to exactly one County.
+  // Cross-county operations are forbidden.
+  // NOTE: Nullable during migration period. New records MUST set countyId.
+  // ==========================================================================
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // ==========================================================================
+  // GEOGRAPHIC CONTEXT: City Reference (Human-Anchored)
+  // ==========================================================================
+  // Business MUST be assigned to one approved city within the county.
+  // City assignment is required for discovery and directory listing.
+  // NOTE: Nullable during migration period. New records MUST set cityId.
+  // ==========================================================================
+  cityId String?
+  cityRef City? @relation(fields: [cityId], references: [id])
+
+  // ==========================================================================
+  // MODULE 2: Business Record (Source of Truth)
+  // ==========================================================================
+  // Canonical business entity fields. This is the ONLY valid business
+  // representation in the system. No other module may redefine these.
+  // ==========================================================================
+
+  // Lifecycle status (DRAFT → ACTIVE → SUSPENDED)
+  businessStatus BusinessStatus @default(DRAFT)
+
+  // Module 2: Owner binding to UserIdentity (separate from legacy ownerId)
+  // Must reference UserIdentity with role VENDOR
+  // UNIQUE constraint enforces one business per vendor
+  ownerUserId String? @unique
+
+  // Directory & Profile Fields
+  slug        String?  @unique
+  description String?
+  category    String?
+
+  // Address fields (enhanced for Module 2)
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  latitude     Float?
+  longitude    Float?
+
+  // Legacy address field (deprecated, use addressLine1)
+  address String?
+  zipCode String?
+
+  // Contact & Media
+  phone    String?
+  website  String?
+  logoUrl  String?
+  coverUrl String?
+  photos   String[] @default([])
+  hours    Json?
+
+  // Google Places refresh audit
+  rawGooglePayload Json?
+  lastRefreshedAt DateTime?
+  refreshStatus   BusinessRefreshStatus @default(NOT_RUN)
+  refreshMissingFields String[] @default([])
+  refreshNotes    String?
+
+  // ==========================================================================
+  // BULK IMPORT SYSTEM: External Data Provider Fields
+  // ==========================================================================
+  // Fields populated from external location data providers.
+  // All fields are optional - missing data is explicitly marked, never inferred.
+  // ==========================================================================
+  
+  // External data source tracking
+  ingestionSource   String?  // e.g., "LOCATION_PROVIDER"
+  externalPlaceId   String?  @unique // Immutable external identifier
+  lastSyncedAt      DateTime?
+  
+  // Enhanced location data
+  formattedAddress  String?
+  plusCode          String?
+  mapLocationUrl    String?
+  addressComponents Json?    // Structured address parts
+  
+  // Business status from source
+  operationalStatus String?  // "OPERATIONAL" | "PERMANENTLY_CLOSED" | "TEMPORARILY_CLOSED"
+  
+  // Contact information
+  internationalPhone String?
+  nationalPhone      String?
+  
+  // Operating hours (extended)
+  regularHours      Json?
+  currentHours      Json?
+  secondaryHours    Json?  // Drive-through, pickup, etc.
+  
+  // Service availability
+  curbsidePickup    Boolean?
+  delivery          Boolean?
+  dineIn            Boolean?
+  takeout           Boolean?
+  
+  // User-generated content
+  aggregateRating   Float?   // 0.0 - 5.0
+  totalRatings      Int?
+  userReviews       Json?    // Array of review objects
+  
+  // Recommendation tracking
+  recommendationCount Int @default(0)
+  
+  // Pricing information
+  priceLevel        String?  // "$" | "$$" | "$$$" | "$$$$"
+  priceRange        String?
+
+  // Relations
+  owner           Account?            @relation("BusinessOwner", fields: [ownerId], references: [id])
+  ownerIdentity   UserIdentity?       @relation("BusinessOwnerIdentity", fields: [ownerUserId], references: [id])
+  claims          BusinessClaim[]
+  deals           Deal[]
+  subscription    Subscription?
+  vouchers        Voucher[]
+  validations     VoucherValidation[]
+  vendorOwnership VendorOwnership?    @relation("VendorOwnershipBusiness")
+  flags           BusinessFlag[]
+  shareEvents     ShareEvent[]
+  recommendations Recommendation[]
+  refreshResults  RefreshJobResult[]
+
+  // Module 8: Founder status
+  founderStatus   FounderStatus?      @relation("FounderStatusBusiness")
+
+  // BusinessPage: Authoritative display layer (1:1)
+  businessPage    BusinessPage?
+
+  @@index([countyId])
+  @@index([category])
+  @@index([city, state])
+  @@index([businessStatus])
+  @@index([ownerUserId])
+  @@index([externalPlaceId])
+  @@index([ingestionSource])
+}
+
+model Subscription {
+  id         String             @id @default(cuid())
+  businessId String             @unique
+  status     SubscriptionStatus
+  startedAt  DateTime
+  endsAt     DateTime?
+  business   Business           @relation(fields: [businessId], references: [id])
+}
+
+// =============================================================================
+// BUSINESS REFRESH JOBS (Google Places Accuracy Verification)
+// =============================================================================
+model RefreshJob {
+  id                 String            @id @default(cuid())
+  mode               String            // "FILTER" | "IDS"
+  filter             Json?
+  businessIds        String[]          @default([])
+  status             RefreshJobStatus  @default(PENDING)
+  totalSelected      Int               @default(0)
+  refreshedCount     Int               @default(0)
+  updatedCount       Int               @default(0)
+  unchangedCount     Int               @default(0)
+  incompleteCount    Int               @default(0)
+  verificationFailedCount Int          @default(0)
+  manualReviewCount  Int               @default(0)
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  // Admin who triggered
+  adminId            String?
+  admin              UserIdentity?     @relation(fields: [adminId], references: [id])
+
+  results            RefreshJobResult[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RefreshJobResult {
+  id               String         @id @default(cuid())
+  jobId            String
+  businessId       String
+  outcome          RefreshOutcome @default(NOT_RUN)
+  missingFields    String[]       @default([])
+  verificationGaps String[]       @default([])
+  requestPayload   Json?
+  responsePayload  Json?
+  notes            String?
+  attempts         Int            @default(0)
+  refreshedAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  job      RefreshJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([businessId])
+  @@index([outcome])
+}
+
+// =============================================================================
+// MODULE 3: Deal Definition (Promotional Offers)
+// =============================================================================
+// Defines promotional offers tied to business listings. Deals define rules
+// but do not issue value - that is Module 4's responsibility.
+// =============================================================================
+
+model Deal {
+  id         String     @id @default(cuid())
+  businessId String
+  title      String
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt @default(now())
+
+  // ==========================================================================
+  // COUNTY SYSTEM BOUNDARY (Required for new records)
+  // ==========================================================================
+  // NOTE: Nullable during migration period. New records MUST set countyId.
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // ==========================================================================
+  // MODULE 3: Enhanced Deal Fields
+  // ==========================================================================
+
+  // Deal content
+  description String?
+
+  // Deal category (for directory filtering)
+  dealCategory String?
+
+  // Pricing (dealPrice must be < originalValue)
+  originalValue Decimal?
+  dealPrice     Decimal?
+
+  // Redemption window
+  redemptionWindowStart DateTime?
+  redemptionWindowEnd   DateTime?
+
+  // Voucher limits
+  voucherQuantityLimit Int?
+
+  // Lifecycle status (INACTIVE → ACTIVE → EXPIRED)
+  dealStatus DealStatus @default(INACTIVE)
+
+  // ==========================================================================
+  // DEAL GUARD (Automated compliance + quality enforcement)
+  // ==========================================================================
+  guardStatus     DealGuardStatus @default(PENDING)
+  qualityScore    Int             @default(0)
+  guardFeedback   String?
+  aiRewriteVersion Json?
+  lastActiveAt    DateTime        @default(now())
+  priceCategory   String          @default("other")
+
+  // Legacy field (deprecated, use dealStatus)
+  isActive Boolean @default(true)
+
+  // Creator tracking
+  createdByUserId String?
+
+  // Relations
+  business    Business            @relation(fields: [businessId], references: [id])
+  creator     UserIdentity?       @relation("DealCreator", fields: [createdByUserId], references: [id])
+  vouchers    Voucher[]
+  validations VoucherValidation[]
+  redemptions Redemption[]
+  purchases   Purchase[]          @relation("DealPurchases")
+  shareEvents ShareEvent[]
+  paymentCallback DealPaymentCallback?
+  paymentCallbacks PaymentCallback[]
+  vendorRedemptions VendorRedemption[] @relation("VendorRedemptions")
+  dealGuardAuditLogs DealGuardAuditLog[]
+
+  @@index([countyId])
+  @@index([businessId])
+  @@index([dealStatus])
+  @@index([guardStatus])
+  @@index([lastActiveAt])
+  @@index([dealCategory])
+  @@index([createdByUserId])
+}
+
+// =============================================================================
+// DEAL GUARD: Price Caps (category-based min/max enforcement)
+// =============================================================================
+model DealPriceCap {
+  id        String   @id @default(uuid())
+  category  String   @unique
+  minPrice  Decimal
+  maxPrice  Decimal
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+}
+
+// =============================================================================
+// DEAL GUARD: Audit Log (immutable decisions + AI responses)
+// =============================================================================
+model DealGuardAuditLog {
+  id               String          @id @default(uuid())
+  dealId           String
+  vendorIdentityId String
+  action           String
+  qualityScore     Int?
+  guardStatus      DealGuardStatus?
+  feedback         String?
+  aiResponse       Json?
+  createdAt        DateTime        @default(now())
+
+  deal   Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  vendor UserIdentity @relation("DealGuardAuditVendor", fields: [vendorIdentityId], references: [id], onDelete: Cascade)
+
+  @@index([dealId])
+  @@index([vendorIdentityId])
+  @@index([createdAt])
+  @@index([guardStatus])
+}
+
+model VoucherValidation {
+  id          String   @id @default(cuid())
+  businessId  String
+  dealId      String
+  externalRef String   @unique
+  validatedAt DateTime @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  voucher     Voucher?
+  business    Business @relation(fields: [businessId], references: [id])
+  deal        Deal     @relation(fields: [dealId], references: [id])
+
+  @@index([countyId])
+  @@index([businessId, dealId])
+}
+
+// =============================================================================
+// MODULE 4, 5 & 6: Voucher, Redemption & Purchase
+// =============================================================================
+// Vouchers are issued against deals. Purchase assigns ownership. Redemption
+// is atomic and irreversible.
+// Status: ISSUED → ASSIGNED (via Purchase) → REDEEMED (via Redemption)
+// =============================================================================
+
+model Voucher {
+  id                   String            @id @default(cuid())
+  validationId         String            @unique
+  dealId               String
+  businessId           String
+  accountId            String?
+  status               VoucherStatus     @default(ISSUED)
+  qrToken              String            @unique
+  issuedAt             DateTime          @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Module 5: Expiration tracking
+  expiresAt            DateTime?
+
+  // Legacy redemption fields (kept for compatibility, use Redemption record)
+  redeemedAt           DateTime?
+  redeemedByBusinessId String?
+  redeemedContext      Json?
+
+  // Relations
+  business             Business          @relation(fields: [businessId], references: [id])
+  deal                 Deal              @relation(fields: [dealId], references: [id])
+  account              Account?          @relation(fields: [accountId], references: [id])
+  validation           VoucherValidation @relation(fields: [validationId], references: [id])
+
+  // Module 5: Redemption record (1:1, immutable)
+  redemption           Redemption?
+
+  // Module 6: Purchase record (1:1, immutable)
+  purchase             Purchase?
+
+  // Vendor redemptions (zero-trust PWA)
+  vendorRedemptions    VendorRedemption[] @relation("VendorRedemptions")
+
+  @@index([countyId])
+  @@index([status])
+  @@index([businessId])
+  @@index([dealId])
+  @@index([expiresAt])
+}
+
+// =============================================================================
+// PAYMENT CALLBACK ENGINE: Deal-specific callback configuration
+// =============================================================================
+// Each deal has a unique callback URL and secret for secure payment integration.
+// Callback is authenticated using HMAC signature + timestamp validation.
+// =============================================================================
+
+model DealPaymentCallback {
+  id                 String   @id @default(cuid())
+  dealId             String   @unique
+  callbackSecret     String   @unique      // HMAC secret for callback authentication
+  callbackUrl        String                // Vendor's payment callback endpoint
+  isActive           Boolean  @default(true)
+  lastCallbackAt     DateTime?
+  callbackFailureCount Int    @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  deal Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  // Incoming callbacks for this deal
+  paymentCallbacks PaymentCallback[]
+
+  @@index([dealId])
+  @@index([isActive])
+}
+
+// =============================================================================
+// PAYMENT CALLBACK: Incoming transaction callbacks from payment providers
+// =============================================================================
+// Records all incoming payment callbacks (successful and failed).
+// Used for idempotency: externalTransactionId can only issue one voucher.
+// =============================================================================
+
+model PaymentCallback {
+  id                      String              @id @default(cuid())
+  dealId                  String
+  dealCallbackConfigId    String
+  externalTransactionId   String              // Unique per external provider
+  amountPaid              Decimal
+  currency                String              // e.g., "USD"
+  paymentStatus           String              // e.g., "completed", "paid", "authorized"
+  customerReference       String              // Email or vendor reference
+  callbackSignature       String              // HMAC signature for validation
+  callbackTimestamp       DateTime            // Timestamp from callback
+  callbackPayload         Json                // Full callback payload (immutable)
+  isSignatureValid        Boolean
+  issuedVoucherId         String?             // Reference to issued voucher (if successful)
+  errorMessage            String?             // Error if processing failed
+  retryCount              Int                 @default(0)
+  processedAt             DateTime?           // When voucher was issued
+  createdAt               DateTime            @default(now())
+
+  deal          Deal                 @relation(fields: [dealId], references: [id])
+  callbackConfig DealPaymentCallback @relation(fields: [dealCallbackConfigId], references: [id])
+
+  @@unique([dealId, externalTransactionId])  // Idempotency key
+  @@index([dealId])
+  @@index([externalTransactionId])
+  @@index([paymentStatus])
+  @@index([issuedVoucherId])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// VENDOR SESSION: Zero-trust PWA authentication and scoping
+// =============================================================================
+// Server-side session for vendor PWA redemption tool.
+// Scopes vendor to specific businesses/locations.
+// Expires after 8-12 hours. No offline authority.
+// =============================================================================
+
+model VendorSession {
+  id              String   @id @default(cuid())
+  vendorUserId    String
+  sessionToken    String   @unique          // JWT-like token for PWA
+  businessIds     String[]                  // Businesses this vendor can redeem for
+  locationIds     String[]                  // Allowed locations (if applicable)
+  isActive        Boolean  @default(true)
+  expiresAt       DateTime                  // 8-12 hours from creation
+  lastActivityAt  DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  vendor UserIdentity @relation("VendorSessions", fields: [vendorUserId], references: [id], onDelete: Cascade)
+
+  // Redemption events performed in this session
+  redemptions VendorRedemption[]
+
+  @@index([vendorUserId])
+  @@index([sessionToken])
+  @@index([isActive])
+  @@index([expiresAt])
+}
+
+// =============================================================================
+// VENDOR REDEMPTION: Immutable redemption audit trail (atomically executed)
+// =============================================================================
+// Records all redemption attempts (successful and failed) for audit.
+// One voucher, one redemption. Double-scan is rejected deterministically.
+// =============================================================================
+
+model VendorRedemption {
+  id              String   @id @default(cuid())
+  sessionId       String
+  voucherId       String   @unique          // One voucher, one successful redemption
+  dealId          String
+  businessId      String
+  vendorUserId    String
+  locationId      String?
+  status          RedemptionStatus         // SUCCESS | ALREADY_REDEEMED | EXPIRED | INVALID_SESSION | UNAUTHORIZED
+  attemptedAt     DateTime @default(now())
+  completedAt     DateTime?
+  failureReason   String?
+  metadata        Json?    // Debug info: verification checks performed, timing, IP, etc.
+
+  session VendorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  voucher Voucher       @relation("VendorRedemptions", fields: [voucherId], references: [id])
+  deal    Deal          @relation("VendorRedemptions", fields: [dealId], references: [id])
+  vendor  UserIdentity  @relation("VendorRedemptions", fields: [vendorUserId], references: [id])
+
+  @@index([sessionId])
+  @@index([voucherId])
+  @@index([dealId])
+  @@index([businessId])
+  @@index([vendorUserId])
+  @@index([status])
+  @@index([attemptedAt])
+}
+
+enum RedemptionStatus {
+  SUCCESS
+  ALREADY_REDEEMED
+  EXPIRED
+  INVALID_SESSION
+  UNAUTHORIZED
+  VOUCHER_INVALID
+  LOCATION_UNAUTHORIZED
+  BUSINESS_MISMATCH
+}
+
+// =============================================================================
+// VOUCHER AUDIT LOG: Comprehensive immutable audit trail
+// =============================================================================
+// Records all significant voucher lifecycle events for admin visibility.
+// =============================================================================
+
+model VoucherAuditLog {
+  id              String   @id @default(cuid())
+  voucherId       String
+  actorType       String   // "SYSTEM" | "VENDOR" | "ADMIN"
+  actorId         String?  // User/vendor ID (null for SYSTEM)
+  action          String   // "ISSUED" | "REDEEMED" | "VOIDED" | "EXPIRED" | "PDF_GENERATED" | "EMAIL_SENT"
+  metadata        Json?    // Action-specific data
+  createdAt       DateTime @default(now())
+
+  // COUNTY SYSTEM BOUNDARY
+  countyId        String?
+
+  @@index([voucherId])
+  @@index([actorType])
+  @@index([action])
+  @@index([createdAt])
+  @@index([actorId])
+}
+
+// =============================================================================
+// MODULE 5: Redemption Enforcement
+// =============================================================================
+// Immutable audit record of voucher redemption. Once created, cannot be modified.
+// A voucher may be redeemed exactly once (voucherId is UNIQUE).
+// =============================================================================
+
+model Redemption {
+  id           String   @id @default(uuid())
+  voucherId    String   @unique
+  dealId       String
+  businessId   String
+  vendorUserId String
+  redeemedAt   DateTime
+  createdAt    DateTime @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Snapshot of voucher value at redemption time (immutable record)
+  originalValue Decimal?
+  dealPrice     Decimal?
+
+  // Relations
+  voucher Voucher      @relation(fields: [voucherId], references: [id])
+  deal    Deal         @relation(fields: [dealId], references: [id])
+  vendor  UserIdentity @relation("RedemptionVendor", fields: [vendorUserId], references: [id])
+
+  @@index([countyId])
+  @@index([voucherId])
+  @@index([businessId])
+  @@index([dealId])
+  @@index([vendorUserId])
+  @@index([redeemedAt])
+}
+
+// =============================================================================
+// MODULE 6: User Purchase Flow
+// =============================================================================
+// Immutable purchase record binding voucher ownership to USER.
+// A voucher may only be assigned once (voucherId is UNIQUE).
+// Purchase finalizes only after payment is confirmed successful.
+// =============================================================================
+
+model Purchase {
+  id              String         @id @default(uuid())
+  userId          String
+  dealId          String
+  voucherId       String         @unique
+  amountPaid      Decimal
+  paymentProvider String
+  paymentIntentId String         @unique
+  status          PurchaseStatus
+  createdAt       DateTime       @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Relations
+  user    UserIdentity @relation("UserPurchases", fields: [userId], references: [id])
+  deal    Deal         @relation("DealPurchases", fields: [dealId], references: [id])
+  voucher Voucher      @relation(fields: [voucherId], references: [id])
+
+  @@index([countyId])
+  @@index([userId])
+  @@index([dealId])
+  @@index([voucherId])
+  @@index([paymentIntentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum PurchaseStatus {
+  COMPLETED
+  FAILED
+}
+
+model BusinessClaim {
+  id              String      @id @default(cuid())
+  businessId      String
+  applicantId     String
+  status          ClaimStatus @default(PENDING)
+  ownerName       String
+  businessEmail   String
+  phone           String
+  submittedAt     DateTime    @default(now())
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  rejectionReason String?
+
+  business  Business @relation(fields: [businessId], references: [id])
+  applicant Account  @relation("ClaimApplicant", fields: [applicantId], references: [id])
+  reviewer  Account? @relation("ClaimReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([businessId])
+  @@index([applicantId])
+  @@index([status])
+}
+
+enum ClaimStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum Role {
+  ADMIN
+  BUSINESS
+  USER
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  CANCELED
+}
+
+enum VoucherStatus {
+  ISSUED
+  ASSIGNED
+  REDEEMED
+}
+
+// =============================================================================
+// MODULE 1: Identity & Ownership (Enforcement Layer)
+// =============================================================================
+// This module is the root enforcement layer for the multi-tenant platform.
+// Roles are IMMUTABLE after creation. Cross-role access is technically impossible.
+// =============================================================================
+
+model UserIdentity {
+  id        String             @id @default(uuid())
+  email     String             @unique
+  role      IdentityRole
+  status    IdentityStatus     @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  // Deal Guard: vendor compliance tracking
+  dealViolationCount   Int       @default(0)
+  dealGuardSuspendedAt DateTime?
+
+  // A VENDOR may have exactly one ownership binding
+  vendorOwnership VendorOwnership?
+
+  // Module 2: Business ownership (VENDOR only, one business per vendor)
+  ownedBusiness Business? @relation("BusinessOwnerIdentity")
+
+  // Module 3: Deals created by this identity
+  createdDeals Deal[] @relation("DealCreator")
+
+  // Module 5: Redemptions performed by this vendor
+  redemptions Redemption[] @relation("RedemptionVendor")
+
+  // Module 6: Purchases made by this user
+  purchases Purchase[] @relation("UserPurchases")
+
+  // Module 8: Admin operations (ADMIN only)
+  adminActionLogs      AdminActionLog[]   @relation("AdminActionLogs")
+  founderGranted       FounderStatus[]    @relation("FounderGrantedBy")
+  founderRemoved       FounderStatus[]    @relation("FounderRemovedBy")
+  featuredCreated      FeaturedContent[]  @relation("FeaturedCreatedBy")
+  featuredRemoved      FeaturedContent[]  @relation("FeaturedRemovedBy")
+  escalationsResolved  AdminEscalation[]  @relation("EscalationResolvedBy")
+  
+  // Bulk Import System (ADMIN only)
+  importJobsCreated    BulkImportJob[]    @relation("ImportJobCreatedBy")
+  flagsResolved        BusinessFlag[]     @relation("FlagResolvedBy")
+
+  // Social sharing tracking
+  shareEvents ShareEvent[]
+
+  // Rewards system
+  rewardBalance Int @default(0)
+  rewardEvents  RewardEvent[]
+
+  // Recommendations given
+  recommendations Recommendation[]
+
+  // Refresh jobs initiated by this admin
+  refreshJobs RefreshJob[]
+
+  // Deal Guard audit logs (VENDOR only, but stored on identity)
+  dealGuardAuditLogs DealGuardAuditLog[] @relation("DealGuardAuditVendor")
+
+  // Vendor sessions (PWA authentication)
+  vendorSessions VendorSession[] @relation("VendorSessions")
+
+  // Vendor redemptions performed
+  vendorRedemptions VendorRedemption[] @relation("VendorRedemptions")
+
+  // COUNTY SYSTEM: Admin-County access bindings (ADMIN only)
+  // Admins are assigned to specific counties; SUPER_ADMIN has implicit global access
+  countyAccess AdminCountyAccess[] @relation("AdminCountyAccess")
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+}
+
+model VendorOwnership {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  businessId String   @unique
+  createdAt  DateTime @default(now())
+
+  user     UserIdentity @relation(fields: [userId], references: [id])
+  business Business     @relation("VendorOwnershipBusiness", fields: [businessId], references: [id])
+
+  @@index([userId])
+  @@index([businessId])
+}
+
+enum IdentityRole {
+  USER
+  VENDOR
+  ADMIN
+  SUPER_ADMIN  // Global access, can create counties and grant admin access
+}
+
+enum IdentityStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+// =============================================================================
+// MODULE 2: Business Record (Source of Truth)
+// =============================================================================
+// Business lifecycle states. Only ACTIVE businesses may issue deals.
+// =============================================================================
+
+enum BusinessStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+}
+
+// =============================================================================
+// MODULE 3: Deal Definition
+// =============================================================================
+// Deal lifecycle states. Only ACTIVE deals may have vouchers issued.
+// Transitions: INACTIVE → ACTIVE → EXPIRED (no reactivation, no deletion)
+// =============================================================================
+
+enum DealStatus {
+  INACTIVE
+  ACTIVE
+  EXPIRED
+}
+
+// =============================================================================
+// DEAL GUARD: Automated compliance status
+// =============================================================================
+enum DealGuardStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REWRITE_REQUIRED
+  SUSPENDED
+}
+
+// =============================================================================
+// MODULE 8: Admin Operations (System Governance)
+// =============================================================================
+// Admin actions are explicit, auditable, and non-bypassable.
+// All admin operations write to the AdminActionLog.
+// AI may recommend; admins decide.
+// =============================================================================
+
+model AdminActionLog {
+  id               String   @id @default(uuid())
+  adminUserId      String
+  actionType       String
+  targetEntityType String
+  targetEntityId   String
+  metadata         Json?
+  createdAt        DateTime @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  // Null for SUPER_ADMIN global actions (county creation, etc.)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Relation to the admin who performed the action
+  admin UserIdentity @relation("AdminActionLogs", fields: [adminUserId], references: [id])
+
+  @@index([countyId])
+  @@index([adminUserId])
+  @@index([actionType])
+  @@index([targetEntityType])
+  @@index([targetEntityId])
+  @@index([createdAt])
+}
+
+// Founder status for businesses (time-bounded benefits)
+model FounderStatus {
+  id          String    @id @default(uuid())
+  businessId  String    @unique
+  grantedAt   DateTime  @default(now())
+  expiresAt   DateTime?
+  grantedBy   String
+  removedAt   DateTime?
+  removedBy   String?
+  isActive    Boolean   @default(true)
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Relations
+  business       Business     @relation("FounderStatusBusiness", fields: [businessId], references: [id])
+  grantedByAdmin UserIdentity @relation("FounderGrantedBy", fields: [grantedBy], references: [id])
+  removedByAdmin UserIdentity? @relation("FounderRemovedBy", fields: [removedBy], references: [id])
+
+  @@index([countyId])
+  @@index([businessId])
+  @@index([isActive])
+  @@index([expiresAt])
+}
+
+// Featured content (businesses and deals)
+model FeaturedContent {
+  id          String          @id @default(uuid())
+  entityType  FeaturedType
+  entityId    String
+  startAt     DateTime
+  endAt       DateTime
+  priority    Int             @default(0)
+  createdBy   String
+  createdAt   DateTime        @default(now())
+  removedAt   DateTime?
+  removedBy   String?
+  isActive    Boolean         @default(true)
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Relations
+  createdByAdmin UserIdentity  @relation("FeaturedCreatedBy", fields: [createdBy], references: [id])
+  removedByAdmin UserIdentity? @relation("FeaturedRemovedBy", fields: [removedBy], references: [id])
+
+  @@unique([countyId, entityType, entityId, isActive])
+  @@index([countyId])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([isActive])
+  @@index([startAt, endAt])
+}
+
+enum FeaturedType {
+  BUSINESS
+  DEAL
+}
+
+// AI Escalation tasks requiring admin review
+model AdminEscalation {
+  id            String            @id @default(uuid())
+  escalationType String
+  severity      EscalationSeverity
+  entityType    String
+  entityId      String
+  description   String
+  metadata      Json?
+  createdAt     DateTime          @default(now())
+  resolved      Boolean           @default(false)
+  resolvedAt    DateTime?
+  resolvedBy    String?
+  resolution    String?
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Relations
+  resolvedByAdmin UserIdentity? @relation("EscalationResolvedBy", fields: [resolvedBy], references: [id])
+
+  @@index([countyId])
+  @@index([escalationType])
+  @@index([severity])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([resolved])
+  @@index([createdAt])
+}
+
+enum EscalationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// =============================================================================
+// BULK IMPORT SYSTEM: Business Listings Ingestion
+// =============================================================================
+// Allows admin-driven import of business listings from external location data
+// providers at scale. Imports are automatic, listings are visible immediately,
+// and problems are flagged for exception-based review.
+// =============================================================================
+
+// Import job tracking
+model BulkImportJob {
+  id                String            @id @default(uuid())
+  countyId          String
+  cityId            String
+  category          String
+  status            ImportJobStatus   @default(PENDING)
+  totalRecords      Int               @default(0)
+  successfulRecords Int               @default(0)
+  failedRecords     Int               @default(0)
+  flaggedRecords    Int               @default(0)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdBy         String
+  createdAt         DateTime          @default(now())
+  errorMessage      String?
+  metadata          Json?
+
+  county      County       @relation(fields: [countyId], references: [id])
+  city        City         @relation(fields: [cityId], references: [id])
+  createdByAdmin UserIdentity @relation("ImportJobCreatedBy", fields: [createdBy], references: [id])
+  flags       BusinessFlag[]
+
+  @@index([countyId])
+  @@index([cityId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum ImportJobStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// Business flag for exception-based review
+model BusinessFlag {
+  id          String           @id @default(uuid())
+  businessId  String
+  importJobId String?
+  flagType    BusinessFlagType
+  severity    FlagSeverity
+  reason      String
+  metadata    Json?
+  status      FlagStatus       @default(OPEN)
+  createdAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+  resolvedBy  String?
+  resolution  String?
+
+  business        Business          @relation(fields: [businessId], references: [id])
+  importJob       BulkImportJob?    @relation(fields: [importJobId], references: [id])
+  resolvedByAdmin UserIdentity?     @relation("FlagResolvedBy", fields: [resolvedBy], references: [id])
+
+  @@index([businessId])
+  @@index([importJobId])
+  @@index([flagType])
+  @@index([severity])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum BusinessFlagType {
+  DUPLICATE_EXTERNAL_ID
+  DUPLICATE_NAME_ADDRESS
+  INVALID_CITY
+  OUT_OF_BOUNDS
+  PERMANENTLY_CLOSED
+  MISSING_CRITICAL_DATA
+  CATEGORY_MISMATCH
+}
+
+enum FlagSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum FlagStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+// =============================================================================
+// SHARE TRACKING MODULE
+// =============================================================================
+// Tracks social media shares for businesses and deals to measure engagement
+// and potentially reward users for sharing content.
+// =============================================================================
+
+model ShareEvent {
+  id         String   @id @default(uuid())
+  userId     String
+  businessId String?
+  dealId     String?
+  platform   String   // 'facebook', 'instagram', 'twitter', 'linkedin', etc.
+  createdAt  DateTime @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String
+  county   County @relation(fields: [countyId], references: [id])
+
+  // Relations
+  user     UserIdentity  @relation(fields: [userId], references: [id])
+  business Business?     @relation(fields: [businessId], references: [id])
+  deal     Deal?         @relation(fields: [dealId], references: [id])
+
+  @@index([countyId])
+  @@index([userId])
+  @@index([businessId])
+  @@index([dealId])
+  @@index([platform])
+  @@index([createdAt])
+}
+
+enum SharePlatform {
+  FACEBOOK
+  INSTAGRAM
+  TWITTER
+  LINKEDIN
+  OTHER
+}
+
+// =============================================================================
+// REWARDS SYSTEM
+// =============================================================================
+// Tracks reward events and user reward balances for gamification and
+// engagement incentives (e.g., sharing content, referrals, etc.)
+// =============================================================================
+
+model RewardEvent {
+  id          String   @id @default(uuid())
+  userId      String
+  points      Int
+  eventType   String   // 'share', 'referral', 'purchase', etc.
+  description String?
+  createdAt   DateTime @default(now())
+
+  // COUNTY SYSTEM BOUNDARY (Required)
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id])
+
+  // Relations
+  user UserIdentity @relation(fields: [userId], references: [id])
+
+  @@index([countyId])
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// BUSINESS PAGE MODULE (Authoritative Display Layer)
+// =============================================================================
+// BusinessPage is the AUTHORITATIVE source for all public display.
+// - Auto-created on import
+// - Auto-published immediately
+// - Homepage featured cards MUST read from BusinessPage, NOT Business
+// - Google Places is used ONLY at import time, NEVER for rendering
+// =============================================================================
+
+model BusinessPage {
+  id            String   @id @default(uuid())
+  businessId    String   @unique
+  slug          String   @unique
+  title         String   // Business name
+  heroImageUrl  String?  // Defaults to Business.primaryImageUrl at creation
+  locationText  String?  // City/state or full location string
+  aiDescription String?  // OpenAI-generated description
+
+  // Publishing status (auto-published on import)
+  isPublished   Boolean  @default(true)
+  publishedAt   DateTime @default(now())
+
+  // Featured status (source of truth for homepage featured cards)
+  isFeatured    Boolean  @default(false)
+  featuredAt    DateTime?
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relation to Business
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([slug])
+  @@index([isPublished])
+  @@index([isFeatured])
+  @@index([featuredAt])
+}
+
+// =============================================================================
+// RECOMMENDATION SYSTEM
+// =============================================================================
+// Tracks business recommendations from users to display social proof
+// =============================================================================
+
+model Recommendation {
+  id         String   @id @default(uuid())
+  businessId String
+  userId     String?  // Optional - can be anonymous
+  ipAddress  String?  // Track to prevent spam
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  // Relations
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     UserIdentity? @relation(fields: [userId], references: [id])
+
+  @@index([businessId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([ipAddress])
+}
+
+enum RewardEventType {
+  SHARE
+  REFERRAL
+  PURCHASE
+  SIGNUP
+  OTHER
+}

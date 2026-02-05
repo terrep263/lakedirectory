@@ -1,9 +1,14 @@
 import OpenAI from 'openai'
 import type { DealSubmission } from './types'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+let _openai: OpenAI | null = null
+function getOpenAIClient(): OpenAI {
+  const key = process.env.OPENAI_API_KEY
+  if (!key) throw new Error('OpenAI API key not configured')
+  if (_openai) return _openai
+  _openai = new OpenAI({ apiKey: key })
+  return _openai
+}
 
 export async function scoreQuality(deal: DealSubmission): Promise<{ score: number; feedback: string; raw?: unknown }> {
   if (!process.env.OPENAI_API_KEY) {
@@ -31,6 +36,7 @@ JSON response:
 }`
 
   try {
+    const openai = getOpenAIClient()
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
@@ -87,6 +93,7 @@ JSON:
 }`
 
   try {
+    const openai = getOpenAIClient()
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],

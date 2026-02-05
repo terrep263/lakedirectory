@@ -28,6 +28,12 @@ yarn-error.log*
 .env
 .env*.local
 
+# Local-only artifacts (docs/media dumps)
+local-artifacts/
+
+# Windows special/reserved filename that may exist locally
+nul
+
 # Vercel
 .vercel
 

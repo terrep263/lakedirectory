@@ -16,7 +16,14 @@ export type SeoDealDraft = {
   dealPrice: number
 }
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+let _openai: OpenAI | null = null
+function getOpenAIClient(): OpenAI {
+  const key = process.env.OPENAI_API_KEY
+  if (!key) throw new Error('OpenAI API key not configured')
+  if (_openai) return _openai
+  _openai = new OpenAI({ apiKey: key })
+  return _openai
+}
 
 const DISALLOWED_PATTERNS: RegExp[] = [
   /\bbogo\b/i,
@@ -146,6 +153,7 @@ Return JSON only with this shape:
   }
 }`
 
+  const openai = getOpenAIClient()
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],

@@ -1,8 +1,13 @@
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let _openai: OpenAI | null = null
+function getOpenAIClient(): OpenAI {
+  const key = process.env.OPENAI_API_KEY
+  if (!key) throw new Error('OpenAI API key not configured')
+  if (_openai) return _openai
+  _openai = new OpenAI({ apiKey: key })
+  return _openai
+}
 
 export interface BusinessInfoForDescription {
   name: string;
@@ -27,6 +32,7 @@ export async function generateBusinessDescription(
   }
 
   const prompt = buildDescriptionPrompt(businessInfo);
+  const openai = getOpenAIClient()
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',

@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { MainNav, Footer } from '@/components/home';
 
+export const dynamic = 'force-dynamic';
+
 interface PageProps {
   params: Promise<{
     slug: string;
@@ -16,50 +18,116 @@ interface PageProps {
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const { slug } = await params;
-
-  const business = await prisma.business.findFirst({
-    where: {
-      OR: [{ slug }, { id: slug }],
-    },
-    select: {
-      name: true,
-    },
-  });
-
-  if (!business) {
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
     return {
-      title: 'Business Not Found',
+      title: 'Claim Business | Lake County Local',
+      description: 'Submit a claim request for a local business.',
     };
   }
 
-  return {
-    title: `Claim ${business.name} | Lake County Local`,
-    description: `Submit a claim request for ${business.name}`,
-  };
+  const { slug } = await params;
+
+  try {
+    const business = await prisma.business.findFirst({
+      where: {
+        OR: [{ slug }, { id: slug }],
+      },
+      select: {
+        name: true,
+      },
+    });
+
+    if (!business) {
+      return {
+        title: 'Business Not Found',
+      };
+    }
+
+    return {
+      title: `Claim ${business.name} | Lake County Local`,
+      description: `Submit a claim request for ${business.name}`,
+    };
+  } catch {
+    return {
+      title: 'Claim Business | Lake County Local',
+      description: 'Submit a claim request for a local business.',
+    };
+  }
 }
 
 export default async function ClaimBusinessPage({ params }: PageProps) {
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return (
+      <div className="min-h-screen flex flex-col bg-background">
+        <header className="hero-gradient text-white">
+          <div className="max-w-7xl mx-auto px-6 py-6">
+            <MainNav variant="dark" />
+          </div>
+        </header>
+        <main className="flex-1 py-12">
+          <div className="mx-auto max-w-2xl px-6">
+            <Card className="shadow-soft border-0">
+              <CardHeader>
+                <CardTitle className="font-heading">Claim This Business</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">This page loads at runtime in production.</p>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
   const { slug } = await params;
 
-  // Get business
-  const business = await prisma.business.findFirst({
-    where: {
-      OR: [{ slug }, { id: slug }],
-    },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      ownerId: true,
-      address: true,
-      city: true,
-      state: true,
-    },
-  });
+  let business: any
+  try {
+    // Get business
+    business = await prisma.business.findFirst({
+      where: {
+        OR: [{ slug }, { id: slug }],
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        ownerId: true,
+        address: true,
+        city: true,
+        state: true,
+      },
+    });
+  } catch {
+    business = null
+  }
 
   if (!business) {
-    notFound();
+    // Soft failure when DB is unreachable
+    return (
+      <div className="min-h-screen flex flex-col bg-background">
+        <header className="hero-gradient text-white">
+          <div className="max-w-7xl mx-auto px-6 py-6">
+            <MainNav variant="dark" />
+          </div>
+        </header>
+        <main className="flex-1 py-12">
+          <div className="mx-auto max-w-2xl px-6">
+            <Card className="shadow-soft border-0">
+              <CardHeader>
+                <CardTitle className="font-heading">This page is temporarily unavailable</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">Please try again in a moment.</p>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
   }
 
   // If already claimed, redirect to profile

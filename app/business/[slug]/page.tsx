@@ -20,6 +20,8 @@ import { validateBusinessPageShareability, validateBusinessShareability, getShar
 import PublicHeader from '@/components/layout/PublicHeader';
 import PublicFooter from '@/components/layout/PublicFooter';
 
+export const dynamic = 'force-dynamic';
+
 interface PageProps {
   params: Promise<{
     slug: string;
@@ -27,6 +29,14 @@ interface PageProps {
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  // Vercel runs "Collecting page data" during build. Avoid DB work there.
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return {
+      title: 'Business | Lake County Local',
+      description: 'Discover trusted local businesses in Lake County.',
+    };
+  }
+
   const { slug } = await params;
 
   const hdrs = await headers();
@@ -38,193 +48,224 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const forwardedHost = getHeader('x-forwarded-host') || getHeader('host') || 'localhost:3000';
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `${forwardedProto}://${forwardedHost}`;
 
-  // Try to find BusinessPage first (authoritative source for display)
-  const page = await prisma.businessPage.findFirst({
-    where: {
-      OR: [{ slug }, { businessId: slug }],
-      isPublished: true,
-    },
-    select: {
-      title: true,
-      slug: true,
-      aiDescription: true,
-      locationText: true,
-      heroImageUrl: true,
-      business: {
-        select: {
-          category: true,
-          logoUrl: true,
+  try {
+    // Try to find BusinessPage first (authoritative source for display)
+    const page = await prisma.businessPage.findFirst({
+      where: {
+        OR: [{ slug }, { businessId: slug }],
+        isPublished: true,
+      },
+      select: {
+        title: true,
+        slug: true,
+        aiDescription: true,
+        locationText: true,
+        heroImageUrl: true,
+        business: {
+          select: {
+            category: true,
+            logoUrl: true,
+          },
         },
       },
-    },
-  });
+    });
 
-  if (page) {
-    const businessUrl = `${baseUrl}/business/${page.slug}`;
-    const description = page.aiDescription || `${page.title} - ${page.business.category || 'Business'} in ${page.locationText || 'Lake County, Florida'}`;
-    
-    // Use heroImageUrl (1200x630 minimum) or fallback to logoUrl
-    // Ensure absolute URL for social sharing
-    const imageUrl = page.heroImageUrl || page.business.logoUrl;
-    const absoluteImageUrl = imageUrl?.startsWith('http') 
-      ? imageUrl 
-      : imageUrl 
-        ? `${baseUrl}${imageUrl}` 
+    if (page) {
+      const businessUrl = `${baseUrl}/business/${page.slug}`;
+      const description =
+        page.aiDescription ||
+        `${page.title} - ${page.business.category || 'Business'} in ${page.locationText || 'Lake County, Florida'}`;
+
+      // Use heroImageUrl (1200x630 minimum) or fallback to logoUrl
+      // Ensure absolute URL for social sharing
+      const imageUrl = page.heroImageUrl || page.business.logoUrl;
+      const absoluteImageUrl = imageUrl?.startsWith('http')
+        ? imageUrl
+        : imageUrl
+          ? `${baseUrl}${imageUrl}`
+          : null;
+
+      return {
+        title: `${page.title} | Lake County Local`,
+        description,
+        metadataBase: new URL(baseUrl),
+        alternates: { canonical: businessUrl },
+        // Open Graph metadata - business-specific, never site-wide defaults
+        openGraph: {
+          // Use standard OG type supported by Next.js metadata API
+          type: 'website',
+          url: businessUrl,
+          title: page.title,
+          description,
+          siteName: 'Lake County Local',
+          images: absoluteImageUrl
+            ? [
+                {
+                  url: absoluteImageUrl,
+                  width: 1200,
+                  height: 630,
+                  alt: page.title,
+                },
+              ]
+            : [],
+          locale: 'en_US',
+        },
+        // Twitter Card metadata - business-specific
+        twitter: {
+          card: 'summary_large_image',
+          title: page.title,
+          description,
+          images: absoluteImageUrl ? [absoluteImageUrl] : [],
+        },
+      };
+    }
+
+    // Fallback to Business table for legacy data
+    const business = await prisma.business.findFirst({
+      where: {
+        OR: [{ slug }, { id: slug }],
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        description: true,
+        category: true,
+        city: true,
+        logoUrl: true,
+        coverUrl: true,
+      },
+    });
+
+    if (!business) {
+      return {
+        title: 'Business Not Found',
+      };
+    }
+
+    const businessUrl = `${baseUrl}/business/${business.slug || business.id}`;
+    const description =
+      business.description ||
+      `${business.name} - ${business.category || 'Business'} in ${business.city || 'Lake County'}, Florida`;
+    const imageUrl = business.coverUrl || business.logoUrl;
+    const absoluteImageUrl = imageUrl?.startsWith('http')
+      ? imageUrl
+      : imageUrl
+        ? `${baseUrl}${imageUrl}`
         : null;
 
     return {
-      title: `${page.title} | Lake County Local`,
+      title: `${business.name} | Lake County Local`,
       description,
       metadataBase: new URL(baseUrl),
       alternates: { canonical: businessUrl },
-      // Open Graph metadata - business-specific, never site-wide defaults
       openGraph: {
         // Use standard OG type supported by Next.js metadata API
         type: 'website',
         url: businessUrl,
-        title: page.title,
+        title: business.name,
         description,
         siteName: 'Lake County Local',
-        images: absoluteImageUrl ? [
-          {
-            url: absoluteImageUrl,
-            width: 1200,
-            height: 630,
-            alt: page.title,
-          }
-        ] : [],
+        images: absoluteImageUrl
+          ? [
+              {
+                url: absoluteImageUrl,
+                width: 1200,
+                height: 630,
+                alt: business.name,
+              },
+            ]
+          : [],
         locale: 'en_US',
       },
-      // Twitter Card metadata - business-specific
       twitter: {
         card: 'summary_large_image',
-        title: page.title,
+        title: business.name,
         description,
         images: absoluteImageUrl ? [absoluteImageUrl] : [],
       },
     };
-  }
-
-  // Fallback to Business table for legacy data
-  const business = await prisma.business.findFirst({
-    where: {
-      OR: [{ slug }, { id: slug }],
-    },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      description: true,
-      category: true,
-      city: true,
-      logoUrl: true,
-      coverUrl: true,
-    },
-  });
-
-  if (!business) {
+  } catch {
     return {
-      title: 'Business Not Found',
+      title: 'Business | Lake County Local',
+      description: 'Discover trusted local businesses in Lake County.',
     };
   }
-
-    const businessUrl = `${baseUrl}/business/${business.slug || business.id}`;
-  const description = business.description || `${business.name} - ${business.category || 'Business'} in ${business.city || 'Lake County'}, Florida`;
-  const imageUrl = business.coverUrl || business.logoUrl;
-    const absoluteImageUrl = imageUrl?.startsWith('http') 
-      ? imageUrl 
-      : imageUrl 
-        ? `${baseUrl}${imageUrl}` 
-        : null;
-
-  return {
-    title: `${business.name} | Lake County Local`,
-    description,
-      metadataBase: new URL(baseUrl),
-      alternates: { canonical: businessUrl },
-    openGraph: {
-      // Use standard OG type supported by Next.js metadata API
-      type: 'website',
-      url: businessUrl,
-      title: business.name,
-      description,
-      siteName: 'Lake County Local',
-      images: absoluteImageUrl ? [
-        {
-          url: absoluteImageUrl,
-          width: 1200,
-          height: 630,
-          alt: business.name,
-        }
-      ] : [],
-      locale: 'en_US',
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title: business.name,
-      description,
-      images: absoluteImageUrl ? [absoluteImageUrl] : [],
-    },
-  };
 }
 
 export default async function BusinessProfilePage({ params }: PageProps) {
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return (
+      <div className="min-h-screen bg-[#f6f8fb]">
+        <PublicHeader />
+        <main className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-16">
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h1 className="text-2xl font-bold text-slate-900">Business</h1>
+            <p className="mt-2 text-slate-600">This page loads at runtime in production.</p>
+          </div>
+        </main>
+        <PublicFooter />
+      </div>
+    );
+  }
+
   const { slug } = await params;
 
-  // Try to find BusinessPage first (authoritative source for display)
-  const page = await prisma.businessPage.findFirst({
-    where: {
-      OR: [{ slug }, { businessId: slug }],
-      isPublished: true,
-    },
-    include: {
-      business: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          description: true,
-          category: true,
-          address: true,
-          addressLine1: true,
-          city: true,
-          state: true,
-          zipCode: true,
-          postalCode: true,
-          phone: true,
-          website: true,
-          latitude: true,
-          longitude: true,
-          logoUrl: true,
-          coverUrl: true,
-          photos: true,
-          hours: true,
-          isVerified: true,
-          ownerId: true,
-          countyId: true,
-          recommendationCount: true,
-          createdAt: true,
-          formattedAddress: true,
-          deals: {
-            where: {
-              dealStatus: 'ACTIVE',
-            },
-            select: {
-              id: true,
-              title: true,
-              description: true,
+  try {
+    // Try to find BusinessPage first (authoritative source for display)
+    const page = await prisma.businessPage.findFirst({
+      where: {
+        OR: [{ slug }, { businessId: slug }],
+        isPublished: true,
+      },
+      include: {
+        business: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            description: true,
+            category: true,
+            address: true,
+            addressLine1: true,
+            city: true,
+            state: true,
+            zipCode: true,
+            postalCode: true,
+            phone: true,
+            website: true,
+            latitude: true,
+            longitude: true,
+            logoUrl: true,
+            coverUrl: true,
+            photos: true,
+            hours: true,
+            isVerified: true,
+            ownerId: true,
+            countyId: true,
+            recommendationCount: true,
+            createdAt: true,
+            formattedAddress: true,
+            deals: {
+              where: {
+                dealStatus: 'ACTIVE',
+              },
+              select: {
+                id: true,
+                title: true,
+                description: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  // If BusinessPage found, use it
-  if (page) {
-    const business = page.business;
-    const isClaimed = business.ownerId !== null;
-    const isFeatured = page.isFeatured;
+    // If BusinessPage found, use it
+    if (page) {
+      const business = page.business;
+      const isClaimed = business.ownerId !== null;
+      const isFeatured = page.isFeatured;
 
     // Validate shareability
     const shareValidation = validateBusinessPageShareability({
@@ -263,72 +304,91 @@ export default async function BusinessProfilePage({ params }: PageProps) {
       shareValidation,
     };
 
-    return renderBusinessPage(displayData, isClaimed);
-  }
+      return renderBusinessPage(displayData, isClaimed);
+    }
 
-  // Fallback to Business table for legacy data without BusinessPage
-  const business = await prisma.business.findFirst({
-    where: {
-      OR: [{ slug }, { id: slug }],
-    },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      description: true,
-      category: true,
-      address: true,
-      city: true,
-      state: true,
-      zipCode: true,
-      phone: true,
-      website: true,
-      latitude: true,
-      longitude: true,
-      logoUrl: true,
-      coverUrl: true,
-      photos: true,
-      hours: true,
-      isVerified: true,
-      ownerId: true,
-      countyId: true,
-      recommendationCount: true,
-      createdAt: true,
-      deals: {
-        where: {
-          dealStatus: 'ACTIVE',
-        },
-        select: {
-          id: true,
-          title: true,
-          description: true,
+    // Fallback to Business table for legacy data without BusinessPage
+    const business = await prisma.business.findFirst({
+      where: {
+        OR: [{ slug }, { id: slug }],
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        description: true,
+        category: true,
+        address: true,
+        city: true,
+        state: true,
+        zipCode: true,
+        phone: true,
+        website: true,
+        latitude: true,
+        longitude: true,
+        logoUrl: true,
+        coverUrl: true,
+        photos: true,
+        hours: true,
+        isVerified: true,
+        ownerId: true,
+        countyId: true,
+        recommendationCount: true,
+        createdAt: true,
+        deals: {
+          where: {
+            dealStatus: 'ACTIVE',
+          },
+          select: {
+            id: true,
+            title: true,
+            description: true,
+          },
         },
       },
-    },
-  });
+    });
 
-  if (!business) {
-    notFound();
+    if (!business) {
+      notFound();
+    }
+
+    const isClaimed = business.ownerId !== null;
+
+    // Validate shareability for legacy business
+    const shareValidation = validateBusinessShareability({
+      name: business.name,
+      description: business.description,
+      logoUrl: business.logoUrl,
+      coverUrl: business.coverUrl,
+    });
+
+    const displayData = {
+      ...business,
+      isFeatured: false,
+      locationText: business.city ? `${business.city}, ${business.state || 'FL'}` : null,
+      shareValidation,
+    };
+
+    return renderBusinessPage(displayData, isClaimed);
+  } catch {
+    return (
+      <div className="min-h-screen bg-[#f6f8fb]">
+        <PublicHeader />
+        <main className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-16">
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h1 className="text-2xl font-bold text-slate-900">This page is temporarily unavailable</h1>
+            <p className="mt-2 text-slate-600">Please try again in a moment.</p>
+            <div className="mt-6">
+              <Link href="/businesses" className="text-sm font-semibold text-blue-700 hover:text-blue-800">
+                Back to businesses →
+              </Link>
+            </div>
+          </div>
+        </main>
+        <PublicFooter />
+      </div>
+    );
   }
-
-  const isClaimed = business.ownerId !== null;
-  
-  // Validate shareability for legacy business
-  const shareValidation = validateBusinessShareability({
-    name: business.name,
-    description: business.description,
-    logoUrl: business.logoUrl,
-    coverUrl: business.coverUrl,
-  });
-
-  const displayData = {
-    ...business,
-    isFeatured: false,
-    locationText: business.city ? `${business.city}, ${business.state || 'FL'}` : null,
-    shareValidation,
-  };
-
-  return renderBusinessPage(displayData, isClaimed);
 }
 
 interface DisplayData {

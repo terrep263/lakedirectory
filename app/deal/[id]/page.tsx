@@ -15,6 +15,8 @@ import PublicHeader from '@/components/layout/PublicHeader';
 import PublicFooter from '@/components/layout/PublicFooter';
 import { DealStatus } from '@prisma/client';
 
+export const dynamic = 'force-dynamic';
+
 interface PageProps {
   params: Promise<{
     id: string;
@@ -22,80 +24,111 @@ interface PageProps {
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const { id } = await params;
-
-  const deal = await prisma.deal.findUnique({
-    where: { id },
-    select: {
-      title: true,
-      description: true,
-      business: {
-        select: {
-          name: true,
-          city: true,
-        },
-      },
-    },
-  });
-
-  if (!deal) {
+  // Avoid DB calls during Vercel build ("Collecting page data").
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
     return {
-      title: 'Deal Not Found',
+      title: 'Deal | Lake County Local',
+      description: 'Discover local deals in Lake County.',
     };
   }
 
-  return {
-    title: `${deal.title} | ${deal.business.name} | Lake County Local`,
-    description: deal.description || `${deal.title} at ${deal.business.name}`,
-  };
+  const { id } = await params;
+
+  try {
+    const deal = await prisma.deal.findUnique({
+      where: { id },
+      select: {
+        title: true,
+        description: true,
+        business: {
+          select: {
+            name: true,
+            city: true,
+          },
+        },
+      },
+    });
+
+    if (!deal) {
+      return {
+        title: 'Deal Not Found',
+      };
+    }
+
+    return {
+      title: `${deal.title} | ${deal.business.name} | Lake County Local`,
+      description: deal.description || `${deal.title} at ${deal.business.name}`,
+    };
+  } catch {
+    return {
+      title: 'Deal | Lake County Local',
+      description: 'Discover local deals in Lake County.',
+    };
+  }
 }
 
 export default async function DealPage({ params }: PageProps) {
-  const { id } = await params;
-
-  const deal = await prisma.deal.findUnique({
-    where: { id },
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      dealCategory: true,
-      originalValue: true,
-      dealPrice: true,
-      redemptionWindowEnd: true,
-      dealStatus: true,
-      createdAt: true,
-      countyId: true,
-      business: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          category: true,
-          city: true,
-          state: true,
-          address: true,
-          phone: true,
-          website: true,
-          logoUrl: true,
-          coverUrl: true,
-        },
-      },
-    },
-  });
-
-  if (!deal || deal.dealStatus !== DealStatus.ACTIVE) {
-    notFound();
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return (
+      <div className="min-h-screen bg-[#f6f8fb]">
+        <PublicHeader />
+        <main className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-16">
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h1 className="text-2xl font-bold text-slate-900">Deal</h1>
+            <p className="mt-2 text-slate-600">This page loads at runtime in production.</p>
+          </div>
+        </main>
+        <PublicFooter countyName="Lake County" state="Florida" />
+      </div>
+    );
   }
 
-  const dealUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'https://lakecountylocal.com'}/deal/${deal.id}`;
-  const businessUrl = `/business/${deal.business.slug || deal.business.id}`;
+  const { id } = await params;
 
-  return (
-    <div className="min-h-screen bg-[#f6f8fb]">
-      <PublicHeader />
+  try {
+    const deal = await prisma.deal.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        dealCategory: true,
+        originalValue: true,
+        dealPrice: true,
+        redemptionWindowEnd: true,
+        dealStatus: true,
+        createdAt: true,
+        countyId: true,
+        business: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            category: true,
+            city: true,
+            state: true,
+            address: true,
+            phone: true,
+            website: true,
+            logoUrl: true,
+            coverUrl: true,
+          },
+        },
+      },
+    });
 
-      <main>
+    if (!deal || deal.dealStatus !== DealStatus.ACTIVE) {
+      notFound();
+    }
+
+    const dealUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'https://lakecountylocal.com'}/deal/${deal.id}`;
+    const businessUrl = `/business/${deal.business.slug || deal.business.id}`;
+
+    return (
+      <div className="min-h-screen bg-[#f6f8fb]">
+        <PublicHeader />
+
+        <main>
 
       {/* Breadcrumbs */}
       <div className="bg-white border-b border-slate-200">
@@ -358,12 +391,31 @@ export default async function DealPage({ params }: PageProps) {
         </div>
       </div>
 
-      <PublicFooter countyName="Lake County" state="Florida" />
+          <PublicFooter countyName="Lake County" state="Florida" />
 
-      </main>
+        </main>
 
-      {/* Admin Quick Access */}
-      <AdminQuickNav />
-    </div>
-  );
+        {/* Admin Quick Access */}
+        <AdminQuickNav />
+      </div>
+    );
+  } catch {
+    return (
+      <div className="min-h-screen bg-[#f6f8fb]">
+        <PublicHeader />
+        <main className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-16">
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h1 className="text-2xl font-bold text-slate-900">This page is temporarily unavailable</h1>
+            <p className="mt-2 text-slate-600">Please try again in a moment.</p>
+            <div className="mt-6">
+              <Link href="/businesses" className="text-sm font-semibold text-blue-700 hover:text-blue-800">
+                Back to businesses →
+              </Link>
+            </div>
+          </div>
+        </main>
+        <PublicFooter countyName="Lake County" state="Florida" />
+      </div>
+    );
+  }
 }

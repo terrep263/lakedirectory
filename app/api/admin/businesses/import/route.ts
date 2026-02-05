@@ -109,7 +109,7 @@ function parseAddress(address?: string): {
 }
 
 /**
- * Store Google photo locally
+ * Store Google photo locally with the actual business ID
  */
 async function storeGooglePhoto(
   apiKey: string,
@@ -136,6 +136,7 @@ async function storeGooglePhoto(
     const filePath = path.join(imageDir, filename);
     await fs.writeFile(filePath, buffer);
 
+    console.log(`[GOOGLE_IMPORT] Stored photo: /business-assets/${filename}`);
     return `/business-assets/${filename}`;
   } catch (err) {
     console.warn('Photo download failed:', err);
@@ -439,6 +440,20 @@ export async function POST(request: NextRequest) {
             if (modelHasField('Business', 'website') && !(existingBusiness as any).website && details.website) {
               updates.website = details.website;
             }
+            
+            // Download and store photo if missing
+            if (!existingBusiness.coverUrl && details.photos?.[0]?.photo_reference && process.env.GOOGLE_PLACES_API_KEY) {
+              const storedPhotoUrl = await storeGooglePhoto(
+                process.env.GOOGLE_PLACES_API_KEY,
+                details.photos[0].photo_reference,
+                existingBusiness.id
+              );
+              if (storedPhotoUrl) {
+                updates.coverUrl = storedPhotoUrl;
+                console.log(`[GOOGLE_IMPORT] Downloaded and stored photo: ${storedPhotoUrl}`);
+              }
+            }
+            
             if (modelHasField('Business', 'logoUrl') && !(existingBusiness as any).logoUrl && details.photos?.[0]?.photo_reference && process.env.GOOGLE_PLACES_API_KEY) {
               const resolved = await resolveGooglePhotoUrl(
                 process.env.GOOGLE_PLACES_API_KEY,
@@ -581,16 +596,18 @@ export async function POST(request: NextRequest) {
         // Generate unique slug
         const slug = await generateUniqueSlug(details.name);
 
-        // Download photo from Details API response
+        // Pre-generate business ID for consistent photo naming
+        const { randomUUID } = await import('crypto');
+        const businessId = randomUUID();
+
+        // Download photo from Details API response using actual business ID
         let heroImageUrl: string | null = null;
         const photoRef = details.photos?.[0]?.photo_reference;
         if (photoRef && process.env.GOOGLE_PLACES_API_KEY) {
-          // Generate temporary ID for photo storage
-          const tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
           heroImageUrl = await storeGooglePhoto(
             process.env.GOOGLE_PLACES_API_KEY,
             photoRef,
-            tempId
+            businessId
           );
         }
 
@@ -614,8 +631,9 @@ export async function POST(request: NextRequest) {
 
         // Create Business + BusinessPage atomically
         const result = await prisma.$transaction(async (tx) => {
-          // A) Create Business record using DETAILS API data
+          // A) Create Business record using DETAILS API data with pre-generated ID
           const businessData: Record<string, any> = {
+            id: businessId,  // Use pre-generated ID that matches photo filename
             name: details.name,
             slug: slug,
             category: categoryId,
@@ -689,40 +707,16 @@ export async function POST(request: NextRequest) {
             },
           });
 
-          console.log('[GOOGLE_IMPORT] USING DETAILS RESULT FOR PERSISTENCE: true');
+          console.log('[GOOGLE_IMPORT] Created new business with photo:', { 
+            businessId: business.id,
+            heroImageUrl,
+            coverUrl: business.coverUrl
+          });
 
           return { business, page };
         });
 
-        // Rename photo file to use actual business ID if it was downloaded
-        if (heroImageUrl && heroImageUrl.includes('temp-')) {
-          try {
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-
-            const oldPath = path.join(process.cwd(), 'public', heroImageUrl);
-            const newFilename = `${result.business.id}.jpg`;
-            const newPath = path.join(process.cwd(), 'public', 'business-assets', newFilename);
-
-            await fs.rename(oldPath, newPath);
-
-            const newImageUrl = `/business-assets/${newFilename}`;
-
-            // Update both records with correct image path
-            await prisma.$transaction([
-              prisma.business.update({
-                where: { id: result.business.id },
-                data: { coverUrl: newImageUrl },
-              }),
-              prisma.businessPage.update({
-                where: { id: result.page.id },
-                data: { heroImageUrl: newImageUrl },
-              }),
-            ]);
-          } catch (renameError) {
-            console.warn('Failed to rename photo file:', renameError);
-          }
-        }
+        // Photo already has correct filename (businessId.jpg), no rename needed
 
         importedBusinesses.push({
           businessId: result.business.id,

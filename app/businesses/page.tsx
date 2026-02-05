@@ -14,7 +14,6 @@ import { prisma } from '@/lib/prisma';
 import AdminQuickNav from '@/components/layout/AdminQuickNav';
 import PublicHeader from '@/components/layout/PublicHeader';
 import PublicFooter from '@/components/layout/PublicFooter';
-import { getPexelsCuratedPhotos, pickPexelsPhotoUrl } from '@/lib/pexels';
 
 export const metadata: Metadata = {
   title: 'Business Directory | Lake County Local',
@@ -116,8 +115,6 @@ export default async function BusinessesPage({ searchParams }: PageProps) {
 
   const cities = [...new Set(allBusinesses.map(b => b.city).filter(Boolean))].sort();
   const categories = [...new Set(allBusinesses.map(b => b.category).filter(Boolean))].sort();
-
-  const pexels = await getPexelsCuratedPhotos(90, 3600);
 
   return (
     <div className="min-h-screen bg-[#f6f8fb]">
@@ -242,8 +239,7 @@ export default async function BusinessesPage({ searchParams }: PageProps) {
                     ? `/business/${business.slug}`
                     : `/business/${business.id}`;
 
-                  const pexelsPhoto = pickPexelsPhotoUrl(pexels, idx + 3);
-                  const hero = (business.coverUrl || business.logoUrl || pexelsPhoto || '').trim();
+                  const hero = (business.coverUrl || business.logoUrl || '').trim();
                   const hasHero = hero.length > 0;
 
                   const ratingRaw = business.aggregateRating ?? null;

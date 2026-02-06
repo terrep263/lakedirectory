@@ -7,7 +7,7 @@
  * Responsibilities:
  * - Call Google Places Details API
  * - Extract editorial summary and photos
- * - Build photo URLs
+ * - Download and store photos locally
  * - Return normalized enrichment data
  * 
  * NO database access. NO business rules.
@@ -30,7 +30,7 @@ interface GooglePlacesDetailsResponse {
 
 export interface EnrichmentData {
   description?: string
-  logoUrl?: string
+  coverUrl?: string
   phone?: string
   error?: string
 }
@@ -80,18 +80,56 @@ async function fetchGoogleJsonWithRetry<T>(
 }
 
 /**
+ * Store Google photo locally with the business ID
+ */
+async function storeGooglePhoto(
+  apiKey: string,
+  photoReference: string,
+  businessId: string
+): Promise<string | null> {
+  try {
+    const { promises: fs } = await import('fs');
+    const path = await import('path');
+
+    const url = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${encodeURIComponent(photoReference)}&key=${apiKey}`;
+    const res = await fetchWithTimeout(url, { timeoutMs: 20000 });
+
+    if (!res.ok) {
+      console.warn(`[ENRICH] Photo fetch failed: ${res.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const imageDir = path.join(process.cwd(), 'public', 'business-assets');
+    await fs.mkdir(imageDir, { recursive: true });
+
+    const filename = `${businessId}.jpg`;
+    const filePath = path.join(imageDir, filename);
+    await fs.writeFile(filePath, buffer);
+
+    console.log(`[ENRICH] Stored photo: /business-assets/${filename}`);
+    return `/business-assets/${filename}`;
+  } catch (err) {
+    console.warn('[ENRICH] Photo download failed:', err);
+    return null;
+  }
+}
+
+/**
  * Fetch enrichment data from Google Places Details API
  * 
  * @param apiKey - Google Places API key
  * @param externalPlaceId - Google Places Place ID
- * @returns Enrichment data (description and/or logoUrl)
+ * @param businessId - Business ID for storing photo with correct filename
+ * @returns Enrichment data (description and/or coverUrl and phone)
  */
 export async function fetchGooglePlacesEnrichment(
   apiKey: string,
-  externalPlaceId: string
+  externalPlaceId: string,
+  businessId: string
 ): Promise<EnrichmentData> {
-  if (!apiKey || !externalPlaceId) {
-    return { error: 'Missing API key or externalPlaceId' }
+  if (!apiKey || !externalPlaceId || !businessId) {
+    return { error: 'Missing API key, externalPlaceId, or businessId' }
   }
 
   try {
@@ -126,10 +164,13 @@ export async function fetchGooglePlacesEnrichment(
       enrichment.description = data.result.editorial_summary.overview
     }
 
-    // Extract first photo and build URL
+    // Download and store photo locally
     if (data.result?.photos && data.result.photos.length > 0) {
       const photoReference = data.result.photos[0].photo_reference
-      enrichment.logoUrl = buildPhotoUrl(apiKey, photoReference)
+      const storedPhotoUrl = await storeGooglePhoto(apiKey, photoReference, businessId)
+      if (storedPhotoUrl) {
+        enrichment.coverUrl = storedPhotoUrl
+      }
     }
 
     // Extract phone number
@@ -142,19 +183,4 @@ export async function fetchGooglePlacesEnrichment(
     const message = error instanceof Error ? error.message : 'Unknown error'
     return { error: `Failed to fetch enrichment: ${message}` }
   }
-}
-
-/**
- * Build a Google Maps photo URL for display
- * 
- * @param apiKey - Google Places API key
- * @param photoReference - Photo reference from Google Places
- * @returns Complete photo URL
- */
-function buildPhotoUrl(apiKey: string, photoReference: string): string {
-  const url = new URL('https://maps.googleapis.com/maps/api/place/photo')
-  url.searchParams.set('maxwidth', '800')
-  url.searchParams.set('photo_reference', photoReference)
-  url.searchParams.set('key', apiKey)
-  return url.toString()
 }

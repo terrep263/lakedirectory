@@ -5,7 +5,8 @@
  * 
  * Enriches existing business listings with Google Places data:
  * - Descriptions from editorial_summary
- * - Photos from Google Places photo references
+ * - Photos downloaded and stored locally
+ * - Phone numbers from formatted_phone_number
  * 
  * ADMIN ACCESS REQUIRED
  * 
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // 3. FETCH TOTAL GOOGLE BUSINESSES
     const totalGoogleBusinesses = await prisma.business.count({
       where: {
-        ingestionSource: 'GOOGLE',
+        ingestionSource: 'GOOGLE_PLACES',
         externalPlaceId: { not: null },
       },
     })
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let skipped = 0
     const errors: { businessId: string; name: string; error: string }[] = []
 
-    // 4. PROCESS ELIGIBLE BUSINESSES WITH CONCURRENCY LIMIT
+    // 5. PROCESS ELIGIBLE BUSINESSES WITH CONCURRENCY LIMIT
     const concurrency = 5
     const perBusinessResults = await mapWithConcurrency(eligibleBusinesses, concurrency, async (business) => {
       try {
@@ -101,12 +102,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
 
         // Check if ALL fields are already filled
-        if (current.description && current.logoUrl && current.phone) {
+        if (current.description && current.coverUrl && current.phone) {
           return { status: 'skipped' as const }
         }
 
-        // Fetch enrichment from Google Places
-        const enrichmentData = await fetchGooglePlacesEnrichment(apiKey, current.externalPlaceId)
+        // Fetch enrichment from Google Places (now downloads photos locally)
+        const enrichmentData = await fetchGooglePlacesEnrichment(apiKey, current.externalPlaceId, current.id)
 
         if (enrichmentData.error) {
           return { status: 'error' as const, businessId: current.id, name: current.name, error: enrichmentData.error }
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         // Only include fields that are empty in current record
         const safeEnrichment = {
           description: !current.description ? enrichmentData.description : undefined,
-          logoUrl: !current.logoUrl ? enrichmentData.logoUrl : undefined,
+          coverUrl: !current.coverUrl ? enrichmentData.coverUrl : undefined,
           phone: !current.phone ? enrichmentData.phone : undefined,
         }
 
@@ -130,6 +131,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         if (Object.keys(safeEnrichment).length === 0) {
           return { status: 'skipped' as const }
         }
+
+        console.log(`[enrich] Enriching ${current.name} with:`, {
+          description: !!safeEnrichment.description,
+          coverUrl: !!safeEnrichment.coverUrl,
+          phone: !!safeEnrichment.phone,
+        })
 
         const updateCount = await applyEnrichmentSafely(current.id, safeEnrichment)
         return updateCount > 0 ? { status: 'enriched' as const } : { status: 'skipped' as const }
@@ -152,7 +159,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    // 5. LOG AUDIT ENTRY
+    console.log(`[enrich] Complete: ${enriched} enriched, ${skipped} skipped, ${errors.length} errors`)
+
+    // 6. LOG AUDIT ENTRY
     try {
       await logAdminAction(
         adminAuth.adminId!,
@@ -182,7 +191,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       eligibleCount: eligibleBusinesses.length,
       message: eligibleBusinesses.length === 0 
         ? `Checked ${totalGoogleBusinesses} Google-sourced businesses. None needed enrichment - all already have descriptions, photos, and phone numbers.`
-        : `Checked ${totalGoogleBusinesses} Google businesses, found ${eligibleBusinesses.length} eligible for enrichment`,
+        : `Checked ${totalGoogleBusinesses} Google businesses, found ${eligibleBusinesses.length} eligible for enrichment. Successfully enriched ${enriched} businesses with photos, descriptions, and phone numbers.`,
       ...(errors.length > 0 && { sampleErrors: errors.slice(0, 5) }),
     })
   } catch (error) {

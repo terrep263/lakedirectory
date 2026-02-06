@@ -3,7 +3,7 @@
  * 
  * Database queries for:
  * - Fetching eligible businesses
- * - Conditionally updating description/photoUrl
+ * - Conditionally updating description/coverUrl/phone
  * 
  * Responsibilities:
  * - Query eligible enrichment candidates
@@ -19,13 +19,13 @@ export interface EligibleBusiness {
   name: string
   externalPlaceId: string
   description: string | null
-  logoUrl: string | null
+  coverUrl: string | null
   phone: string | null
 }
 
 export interface EnrichmentUpdate {
   description?: string
-  logoUrl?: string
+  coverUrl?: string
   phone?: string
 }
 
@@ -33,24 +33,24 @@ export interface EnrichmentUpdate {
  * Fetch all eligible businesses for enrichment
  * 
  * Eligibility criteria:
- * - ingestionSource === "GOOGLE"
+ * - ingestionSource === "GOOGLE_PLACES"
  * - externalPlaceId is present
- * - At least one of: description or logoUrl is empty
+ * - At least one of: description, coverUrl, or phone is empty
  * 
  * @returns Array of eligible businesses
  */
 export async function fetchEligibleBusinesses(): Promise<EligibleBusiness[]> {
   const businesses = await prisma.business.findMany({
     where: {
-      ingestionSource: 'GOOGLE',
+      ingestionSource: 'GOOGLE_PLACES',
       externalPlaceId: {
         not: null,
       },
       OR: [
         { description: null },
         { description: '' },
-        { logoUrl: null },
-        { logoUrl: '' },
+        { coverUrl: null },
+        { coverUrl: '' },
         { phone: null },
         { phone: '' },
       ],
@@ -60,7 +60,7 @@ export async function fetchEligibleBusinesses(): Promise<EligibleBusiness[]> {
       name: true,
       externalPlaceId: true,
       description: true,
-      logoUrl: true,
+      coverUrl: true,
       phone: true,
     },
   })
@@ -70,7 +70,7 @@ export async function fetchEligibleBusinesses(): Promise<EligibleBusiness[]> {
     name: b.name,
     externalPlaceId: b.externalPlaceId || '',
     description: b.description,
-    logoUrl: b.logoUrl,
+    coverUrl: b.coverUrl,
     phone: b.phone,
   }))
 }
@@ -106,15 +106,15 @@ export async function applyEnrichmentSafely(
     updateCount++
   }
 
-  // Only update logoUrl if it's currently empty AND new value exists
-  if (enrichment.logoUrl && (!current.logoUrl || current.logoUrl.trim() === '')) {
-  // Only update phone if it's currently empty AND new value exists
-  if (enrichment.phone && (!current.phone || current.phone.trim() === '')) {
-    updateData.phone = enrichment.phone
+  // Only update coverUrl if it's currently empty AND new value exists
+  if (enrichment.coverUrl && (!current.coverUrl || current.coverUrl.trim() === '')) {
+    updateData.coverUrl = enrichment.coverUrl
     updateCount++
   }
 
-    updateData.logoUrl = enrichment.logoUrl
+  // Only update phone if it's currently empty AND new value exists
+  if (enrichment.phone && (!current.phone || current.phone.trim() === '')) {
+    updateData.phone = enrichment.phone
     updateCount++
   }
 
@@ -141,13 +141,13 @@ export async function getBusinessById(businessId: string) {
   return await prisma.business.findUnique({
     where: { id: businessId },
     select: {
-      phone: true,
       id: true,
       name: true,
       externalPlaceId: true,
       ingestionSource: true,
       description: true,
-      logoUrl: true,
+      coverUrl: true,
+      phone: true,
     },
   })
 }

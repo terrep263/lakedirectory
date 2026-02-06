@@ -11,6 +11,7 @@
 import Link from 'next/link';
 import PublicHeader from '@/components/layout/PublicHeader';
 import PublicFooter from '@/components/layout/PublicFooter';
+import { getPexelsCuratedPhotos, pickPexelsPhotoUrl } from '@/lib/pexels';
 
 // Blog categories based on ZIP reference
 const categories = [
@@ -64,6 +65,9 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
   const filteredPosts = category
     ? placeholderPosts.filter((post) => post.category === category)
     : placeholderPosts;
+
+  // Fetch Pexels curated photos for blog post cards
+  const pexelsPhotos = await getPexelsCuratedPhotos(20, 3600);
 
   return (
     <div className="min-h-screen bg-[#f6f8fb]">
@@ -125,104 +129,125 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {filteredPosts.map((post) => (
-              <Link key={post.id} href={`/blog/${post.slug}`} className="block group">
-                <article
-                  className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow"
-                  style={{ height: '100%' }}
-                >
-                  {/* Featured Image Placeholder */}
-                  <div
-                    className="relative overflow-hidden"
-                    style={{
-                      height: '192px',
-                      background: 'linear-gradient(135deg, #0d9488 0%, #0284c7 100%)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
+            {filteredPosts.map((post, index) => {
+              // Get Pexels photo for this post
+              const pexelsImageUrl = pickPexelsPhotoUrl(pexelsPhotos, index);
+              const imageUrl = post.featuredImageUrl || pexelsImageUrl;
+
+              return (
+                <Link key={post.id} href={`/blog/${post.slug}`} className="block group">
+                  <article
+                    className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow"
+                    style={{ height: '100%' }}
                   >
-                    <svg
-                      className="w-16 h-16 text-white/50"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"
-                      />
-                    </svg>
-                  </div>
-
-                  {/* Content */}
-                  <div style={{ padding: '24px' }}>
-                    {/* Category Badge */}
-                    <span
+                    {/* Featured Image */}
+                    <div
+                      className="relative overflow-hidden"
                       style={{
-                        display: 'inline-block',
-                        padding: '4px 8px',
-                        background: '#dbeafe',
-                        color: '#1e40af',
-                        fontSize: '12px',
-                        fontWeight: '500',
-                        borderRadius: '9999px',
-                        marginBottom: '12px',
+                        height: '192px',
                       }}
                     >
-                      {categories.find((c) => c.id === post.category)?.name || post.category.replace('_', ' ')}
-                    </span>
-
-                    {/* Title */}
-                    <h2
-                      className="group-hover:text-teal-600 transition-colors"
-                      style={{
-                        fontSize: '18px',
-                        fontWeight: 'bold',
-                        color: '#111827',
-                        marginBottom: '8px',
-                        lineHeight: '1.4',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {post.title}
-                    </h2>
-
-                    {/* Excerpt */}
-                    <p
-                      style={{
-                        fontSize: '14px',
-                        color: '#6b7280',
-                        marginBottom: '16px',
-                        lineHeight: '1.6',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 3,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {post.excerpt}
-                    </p>
-
-                    {/* Published Date */}
-                    <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-                      {post.publishedAt
-                        ? new Date(post.publishedAt).toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'long',
-                            day: 'numeric',
-                          })
-                        : 'Draft'}
+                      {imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt={post.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            background: 'linear-gradient(135deg, #0d9488 0%, #0284c7 100%)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <svg
+                            className="w-16 h-16 text-white/50"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={1.5}
+                              d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"
+                            />
+                          </svg>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </article>
-              </Link>
-            ))}
+
+                    {/* Content */}
+                    <div style={{ padding: '24px' }}>
+                      {/* Category Badge */}
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '4px 8px',
+                          background: '#dbeafe',
+                          color: '#1e40af',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          borderRadius: '9999px',
+                          marginBottom: '12px',
+                        }}
+                      >
+                        {categories.find((c) => c.id === post.category)?.name || post.category.replace('_', ' ')}
+                      </span>
+
+                      {/* Title */}
+                      <h2
+                        className="group-hover:text-teal-600 transition-colors"
+                        style={{
+                          fontSize: '18px',
+                          fontWeight: 'bold',
+                          color: '#111827',
+                          marginBottom: '8px',
+                          lineHeight: '1.4',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {post.title}
+                      </h2>
+
+                      {/* Excerpt */}
+                      <p
+                        style={{
+                          fontSize: '14px',
+                          color: '#6b7280',
+                          marginBottom: '16px',
+                          lineHeight: '1.6',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 3,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {post.excerpt}
+                      </p>
+
+                      {/* Published Date */}
+                      <div style={{ fontSize: '12px', color: '#9ca3af' }}>
+                        {post.publishedAt
+                          ? new Date(post.publishedAt).toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                            })
+                          : 'Draft'}
+                      </div>
+                    </div>
+                  </article>
+                </Link>
+              );
+            })}
           </div>
         )}
 

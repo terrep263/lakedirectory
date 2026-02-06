@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import PublicHeader from '@/components/layout/PublicHeader';
 import PublicFooter from '@/components/layout/PublicFooter';
+import { getPexelsCuratedPhotos, pickPexelsPhotoUrl } from '@/lib/pexels';
 
 // Blog categories based on ZIP reference
 const categories = [
@@ -157,6 +158,12 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
 
   const categoryName = categories.find((c) => c.id === post.category)?.name || post.category.replace('_', ' ');
 
+  // Fetch Pexels photos for featured image
+  const pexelsPhotos = await getPexelsCuratedPhotos(20, 3600);
+  const postIndex = placeholderPosts.findIndex((p) => p.slug === slug);
+  const pexelsImageUrl = pickPexelsPhotoUrl(pexelsPhotos, postIndex);
+  const featuredImageUrl = post.featuredImageUrl || pexelsImageUrl;
+
   return (
     <div className="min-h-screen bg-[#f6f8fb]">
       <PublicHeader />
@@ -165,27 +172,42 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
       <main>
         <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12">
         <article>
-          {/* Featured Image Placeholder */}
+          {/* Featured Image */}
           <div
             className="rounded-lg overflow-hidden"
             style={{
               width: '100%',
               height: '384px',
-              background: 'linear-gradient(135deg, #0d9488 0%, #0284c7 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
               marginBottom: '32px',
             }}
           >
-            <svg className="w-24 h-24 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"
+            {featuredImageUrl ? (
+              <img
+                src={featuredImageUrl}
+                alt={post.title}
+                className="w-full h-full object-cover"
               />
-            </svg>
+            ) : (
+              <div
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  background: 'linear-gradient(135deg, #0d9488 0%, #0284c7 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg className="w-24 h-24 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"
+                  />
+                </svg>
+              </div>
+            )}
           </div>
 
           {/* Header */}

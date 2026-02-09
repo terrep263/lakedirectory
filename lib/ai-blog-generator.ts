@@ -94,7 +94,9 @@ async function getUnfeaturedBusinesses(countyId: string, limit: number = 10) {
   const businesses = await prisma.business.findMany({
     where: {
       countyId,
-      subscriptionStatus: 'ACTIVE',
+      subscription: {
+        status: 'ACTIVE',
+      },
     },
     include: {
       founderStatus: {
@@ -131,7 +133,9 @@ async function getCitiesWithBusinesses(countyId: string) {
   const businesses = await prisma.business.findMany({
     where: {
       countyId,
-      subscriptionStatus: 'ACTIVE',
+      subscription: {
+        status: 'ACTIVE',
+      },
     },
     select: {
       city: true,

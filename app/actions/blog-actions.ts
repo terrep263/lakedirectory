@@ -212,28 +212,23 @@ async function getCurrentCountyId(): Promise<string> {
    }
  }
 
- export async function getAllBlogPostsAdmin() {
-   try {
-     const countyId = await getCurrentCountyId()
+export async function getAllBlogPostsAdmin() {
+  const countyId = await getCurrentCountyId()
 
-     const posts = await prisma.blogPost.findMany({
-       where: { countyId },
-       orderBy: [{ createdAt: 'desc' }],
-       include: {
-         author: {
-           select: {
-             email: true,
-           },
-         },
-       },
-     })
+  const posts = await prisma.blogPost.findMany({
+    where: { countyId },
+    orderBy: [{ createdAt: 'desc' }],
+    include: {
+      author: {
+        select: {
+          email: true,
+        },
+      },
+    },
+  })
 
-     return posts
-   } catch (error) {
-     console.log('BlogPost table not available:', error)
-     return []
-   }
- }
+  return posts
+}
 
  export async function getBlogPostById(id: string) {
    try {

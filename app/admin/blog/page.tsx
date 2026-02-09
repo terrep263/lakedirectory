@@ -1,8 +1,9 @@
 import Link from 'next/link'
+import { BlogPost } from '@prisma/client'
 import { getAllBlogPostsAdmin } from '@/app/actions/blog-actions'
 
 export default async function AdminBlogPage() {
-  let posts = []
+  let posts: BlogPost[] = []
   let blogSetupError = false
 
   try {

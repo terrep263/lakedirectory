@@ -5,6 +5,9 @@ import HomeSearch from '@/components/home/HomeSearch'
 import PublicHeader from '@/components/layout/PublicHeader'
 import PublicFooter from '@/components/layout/PublicFooter'
 import { getPexelsCuratedPhotos, pickPexelsPhotoUrl } from '@/lib/pexels'
+import { getFeaturedBlogPosts } from '@/app/actions/blog-actions'
+import DealCard from '@/components/deals/DealCard'
+import { prisma } from '@/lib/prisma'
 
 export const revalidate = 3600 // refresh images hourly
 
@@ -67,32 +70,58 @@ export default async function HomePage() {
     },
   ]
 
-  const blogPosts = [
-    {
-      slug: 'best-local-restaurants-lake-county',
-      title: 'Discover the Best Local Restaurants in Lake County',
-      excerpt:
-        "From family-owned diners to upscale dining experiences, Lake County has something for every palate. Explore our top picks for local cuisine.",
-      category: 'Food & Dining',
-      publishedLabel: 'Jan 15, 2024',
-    },
-    {
-      slug: 'supporting-small-businesses',
-      title: 'Supporting Small Businesses: Why Shopping Local Matters',
-      excerpt:
-        "Learn how your purchasing decisions impact the local economy and why choosing local businesses creates a stronger community.",
-      category: 'Community',
-      publishedLabel: 'Jan 10, 2024',
-    },
-    {
-      slug: 'upcoming-events-lake-county',
-      title: 'Upcoming Events in Lake County This Month',
-      excerpt:
-        "Mark your calendars! Here are the can't-miss events happening across Lake County's 15 cities this month.",
-      category: 'Events',
-      publishedLabel: 'Jan 5, 2024',
-    },
-  ]
+  // Get blog posts (optional - table may not exist)
+  let blogPosts: any[] = []
+  try {
+    blogPosts = await getFeaturedBlogPosts(3)
+  } catch (error) {
+    console.log('Blog posts not available (table may not exist)')
+    blogPosts = []
+  }
+
+  // Get featured deals (optional - graceful failure)
+  let featuredDeals: any[] = []
+  try {
+    featuredDeals = await prisma.deal.findMany({
+      where: {
+        dealStatus: 'ACTIVE',
+      },
+      include: {
+        business: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            city: true,
+            state: true,
+            logoUrl: true,
+            coverUrl: true,
+            category: true,
+            founderStatus: {
+              select: {
+                isActive: true,
+              },
+            },
+          },
+        },
+        _count: {
+          select: {
+            vouchers: {
+              where: { voucherStatus: 'ISSUED' },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { business: { founderStatus: { isActive: 'desc' } } },
+        { createdAt: 'desc' },
+      ],
+      take: 4,
+    })
+  } catch (error) {
+    console.log('Featured deals not available:', error)
+    featuredDeals = []
+  }
 
   const pexels = await getPexelsCuratedPhotos(60, 3600)
   const heroPhoto = 'https://019bb44e-0d7e-7695-9ab5-ee7e0fcf0839.mochausercontent.com/header.jpg'
@@ -121,14 +150,14 @@ export default async function HomePage() {
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
           <div className="max-w-3xl">
             <p className="text-white/90 text-sm font-semibold">
-              Serving all 15 Lake County Cities · 100% Free Business Listings
+              Free Business Listings • Premium Deal Features Available
             </p>
             <h1 className="mt-6 text-4xl sm:text-5xl font-extrabold tracking-tight text-white">
-              Find trusted local businesses in {countyName}.
+              Lake County&apos;s Local Business Directory & Deals Marketplace
             </h1>
             <p className="mt-4 text-lg text-white/80 max-w-2xl">
-              Search by service, city, or category. Explore featured local favorites and
-              discover new places worth supporting.
+              Find trusted local businesses and exclusive voucher deals.
+              Free listings for all businesses, premium features to drive revenue.
             </p>
           </div>
 
@@ -334,6 +363,43 @@ export default async function HomePage() {
           </div>
         </section>
 
+        {/* Hot Deals Section */}
+        {featuredDeals.length > 0 && (
+          <section className="py-14 sm:py-16 border-t border-slate-200">
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+              <div className="flex items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">🔥 Hot Deals This Week</h2>
+                  <p className="mt-2 text-slate-600">
+                    Limited-time vouchers from local businesses
+                  </p>
+                </div>
+                <Link
+                  href="/deals"
+                  className="hidden sm:inline-flex items-center text-sm font-semibold text-blue-700 hover:text-blue-800"
+                >
+                  Browse all deals →
+                </Link>
+              </div>
+
+              <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {featuredDeals.map((deal) => (
+                  <DealCard key={deal.id} deal={deal} />
+                ))}
+              </div>
+
+              <div className="mt-6 sm:hidden">
+                <Link
+                  href="/deals"
+                  className="inline-flex items-center text-sm font-semibold text-blue-700 hover:text-blue-800"
+                >
+                  Browse all deals →
+                </Link>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Featured Listings */}
         <section className="py-14 sm:py-16 border-t border-slate-200 bg-white">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -485,18 +551,33 @@ export default async function HomePage() {
             <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
               {blogPosts.map((post) => (
                 <Link
-                  key={post.slug}
+                  key={post.id}
                   href={`/blog/${post.slug}`}
                   className="group overflow-hidden rounded-lg bg-white shadow-md hover:shadow-lg transition-shadow"
                 >
                   <div className="relative h-44 bg-gradient-to-br from-blue-900 to-sky-600">
+                    {post.featuredImageUrl ? (
+                      <img
+                        src={post.featuredImageUrl}
+                        alt={post.featuredImageAlt || post.title}
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    ) : null}
                     <div className="absolute left-4 top-4">
                       <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-bold text-slate-900 shadow-sm">
-                        {post.category}
+                        {post.category.replace('_', ' ')}
                       </span>
                     </div>
                     <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/60 via-black/20 to-transparent">
-                      <div className="text-xs font-semibold text-white/85">{post.publishedLabel}</div>
+                      <div className="text-xs font-semibold text-white/85">
+                        {post.publishedAt
+                          ? new Date(post.publishedAt).toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                            })
+                          : 'Draft'}
+                      </div>
                       <div className="mt-1 text-base font-bold text-white line-clamp-2">
                         {post.title}
                       </div>

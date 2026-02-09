@@ -341,9 +341,20 @@ export default async function BusinessProfilePage({ params }: PageProps) {
           },
           select: {
             id: true,
-            title: true,
-            description: true,
+            dealTitle: true,
+            dealDescription: true,
+            dealPrice: true,
+            originalPrice: true,
+            _count: {
+              select: {
+                vouchers: {
+                  where: { voucherStatus: 'ISSUED' },
+                },
+              },
+            },
           },
+          orderBy: { createdAt: 'desc' },
+          take: 3,
         },
       },
     });
@@ -414,7 +425,14 @@ interface DisplayData {
   countyId: string | null;
   recommendationCount: number;
   createdAt: Date;
-  deals: Array<{ id: string; title: string; description: string | null }>;
+  deals: Array<{ 
+    id: string; 
+    dealTitle: string; 
+    dealDescription: string | null;
+    dealPrice: number;
+    originalPrice: number | null;
+    _count: { vouchers: number };
+  }>;
   isFeatured: boolean;
   locationText: string | null;
   shareValidation: {
@@ -735,32 +753,76 @@ function renderBusinessPage(business: DisplayData, isClaimed: boolean) {
 
           {/* Active Deals */}
           {business.deals.length > 0 && (
-            <div
-              className="bg-white"
-              style={{ border: '1px solid #e5e7eb', borderRadius: '6px', padding: '24px' }}
-            >
-              <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#111827', marginBottom: '20px' }}>
-                Active Deals
-              </h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {business.deals.map((deal) => (
-                  <div
-                    key={deal.id}
-                    style={{
-                      padding: '16px',
-                      borderRadius: '8px',
-                      background: 'linear-gradient(to right, rgba(34, 197, 94, 0.05), rgba(34, 197, 94, 0.1))',
-                      border: '1px solid rgba(34, 197, 94, 0.2)'
-                    }}
-                  >
-                    <p style={{ fontWeight: '600', color: '#111827', marginBottom: '4px' }}>{deal.title}</p>
-                    {deal.description && (
-                      <p style={{ fontSize: '14px', color: '#4b5563' }}>{deal.description}</p>
-                    )}
-                  </div>
-                ))}
+            <section className="py-12 border-t border-slate-200 bg-amber-50">
+              <div style={{ maxWidth: '1280px', marginLeft: 'auto', marginRight: 'auto', padding: '0 16px' }}>
+                <div className="mb-6">
+                  <h2 className="text-2xl font-bold text-slate-900">
+                    🔥 Active Deals ({business.deals.length})
+                  </h2>
+                  <p className="mt-2 text-slate-600">
+                    Limited-time voucher offers from this business
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {business.deals.map((deal) => {
+                    const discount = deal.originalPrice
+                      ? Math.round(((deal.originalPrice - deal.dealPrice) / deal.originalPrice) * 100)
+                      : null
+                    const availableVouchers = deal._count.vouchers
+
+                    return (
+                      <div
+                        key={deal.id}
+                        className="rounded-xl bg-white border-2 border-amber-300 p-6 shadow-md"
+                      >
+                        <div className="mb-4">
+                          <h3 className="text-lg font-bold text-slate-900 mb-2">
+                            {deal.dealTitle}
+                          </h3>
+                          {deal.dealDescription && (
+                            <p className="text-sm text-slate-600 line-clamp-3">
+                              {deal.dealDescription}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-baseline gap-2 mb-4">
+                          <span className="text-3xl font-extrabold text-emerald-600">
+                            ${deal.dealPrice.toFixed(2)}
+                          </span>
+                          {deal.originalPrice && deal.originalPrice > deal.dealPrice && (
+                            <>
+                              <span className="text-sm font-medium text-slate-400 line-through">
+                                ${deal.originalPrice.toFixed(2)}
+                              </span>
+                              {discount && (
+                                <span className="text-sm font-bold text-red-600">
+                                  Save {discount}%
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        {availableVouchers > 0 && (
+                          <p className="text-xs text-slate-500 mb-3">
+                            {availableVouchers} vouchers available
+                          </p>
+                        )}
+
+                        <Link
+                          href={`/deals/${deal.id}`}
+                          className="block w-full rounded-lg bg-blue-600 px-4 py-3 text-center text-sm font-bold text-white hover:bg-blue-700 transition-colors"
+                        >
+                          Buy Voucher
+                        </Link>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
+            </section>
           )}
 
           {/* Claim This Business CTA - Exact ZIP Structure */}

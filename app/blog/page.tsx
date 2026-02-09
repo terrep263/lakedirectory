@@ -4,14 +4,13 @@
  * Layout primitives:
  * - max-w-[1100px] container
  * - Header with category filters
- * - 3-column blog post grid
- * - Coming soon placeholder until BlogPost model is added
+ * - 3-column blog post grid backed by the CMS
  */
 
 import Link from 'next/link';
 import PublicHeader from '@/components/layout/PublicHeader';
 import PublicFooter from '@/components/layout/PublicFooter';
-import { getPexelsCuratedPhotos, pickPexelsPhotoUrl } from '@/lib/pexels';
+import { getBlogPosts } from '@/app/actions/blog-actions';
 
 // Blog categories based on ZIP reference
 const categories = [
@@ -20,37 +19,6 @@ const categories = [
   { id: 'events', name: 'Events' },
   { id: 'food_dining', name: 'Food & Dining' },
   { id: 'community', name: 'Community' },
-];
-
-// Placeholder posts for demonstration
-const placeholderPosts = [
-  {
-    id: '1',
-    title: 'Discover the Best Local Restaurants in Lake County',
-    slug: 'best-local-restaurants-lake-county',
-    excerpt: 'From family-owned diners to upscale dining experiences, Lake County has something for every palate. Explore our top picks for local cuisine.',
-    category: 'food_dining',
-    featuredImageUrl: null,
-    publishedAt: new Date('2024-01-15'),
-  },
-  {
-    id: '2',
-    title: 'Supporting Small Businesses: Why Shopping Local Matters',
-    slug: 'supporting-small-businesses',
-    excerpt: 'Learn how your purchasing decisions impact the local economy and why choosing local businesses creates a stronger community.',
-    category: 'community',
-    featuredImageUrl: null,
-    publishedAt: new Date('2024-01-10'),
-  },
-  {
-    id: '3',
-    title: 'Upcoming Events in Lake County This Month',
-    slug: 'upcoming-events-lake-county',
-    excerpt: 'Mark your calendars! Here are the can\'t-miss events happening across Lake County\'s 15 cities this month.',
-    category: 'events',
-    featuredImageUrl: null,
-    publishedAt: new Date('2024-01-05'),
-  },
 ];
 
 interface BlogListingPageProps {
@@ -62,12 +30,10 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
   const category = params.category;
 
   // Filter posts by category if selected
+  const allPosts = await getBlogPosts();
   const filteredPosts = category
-    ? placeholderPosts.filter((post) => post.category === category)
-    : placeholderPosts;
-
-  // Fetch Pexels curated photos for blog post cards
-  const pexelsPhotos = await getPexelsCuratedPhotos(20, 3600);
+    ? allPosts.filter((post) => post.category === category)
+    : allPosts;
 
   return (
     <div className="min-h-screen bg-[#f6f8fb]">
@@ -129,10 +95,9 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {filteredPosts.map((post, index) => {
-              // Get Pexels photo for this post
-              const pexelsImageUrl = pickPexelsPhotoUrl(pexelsPhotos, index);
-              const imageUrl = post.featuredImageUrl || pexelsImageUrl;
+            {filteredPosts.map((post) => {
+              const categoryName =
+                categories.find((c) => c.id === post.category)?.name || post.category.replace('_', ' ');
 
               return (
                 <Link key={post.id} href={`/blog/${post.slug}`} className="block group">
@@ -147,10 +112,10 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
                         height: '192px',
                       }}
                     >
-                      {imageUrl ? (
+                      {post.featuredImageUrl ? (
                         <img
-                          src={imageUrl}
-                          alt={post.title}
+                          src={post.featuredImageUrl}
+                          alt={post.featuredImageAlt || post.title}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
                       ) : (
@@ -196,7 +161,7 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
                           marginBottom: '12px',
                         }}
                       >
-                        {categories.find((c) => c.id === post.category)?.name || post.category.replace('_', ' ')}
+                        {categoryName}
                       </span>
 
                       {/* Title */}
@@ -251,27 +216,7 @@ export default async function BlogListingPage({ searchParams }: BlogListingPageP
           </div>
         )}
 
-        {/* Coming Soon Notice */}
-        <div
-          style={{
-            marginTop: '60px',
-            padding: '32px',
-            background: '#f0fdf4',
-            border: '2px solid #86efac',
-            borderRadius: '12px',
-            textAlign: 'center',
-          }}
-        >
-          <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#166534', marginBottom: '8px' }}>
-            More Content Coming Soon!
-          </h3>
-          <p style={{ color: '#166534', maxWidth: '500px', margin: '0 auto' }}>
-            We&apos;re working on bringing you more stories, tips, and updates from businesses across Lake County.
-            Check back soon for new posts!
-          </p>
         </div>
-        </div>
-
         <PublicFooter countyName="Lake County" state="Florida" />
       </main>
     </div>

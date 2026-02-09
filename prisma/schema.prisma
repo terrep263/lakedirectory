@@ -113,6 +113,7 @@ model County {
   voucherValidations VoucherValidation[]
   founderStatuses  FounderStatus[]
   featuredContent  FeaturedContent[]
+  blogPosts        BlogPost[]
   adminActionLogs  AdminActionLog[]
   adminEscalations AdminEscalation[]
   adminCountyAccess AdminCountyAccess[]
@@ -1077,6 +1078,7 @@ model UserIdentity {
   founderRemoved       FounderStatus[]    @relation("FounderRemovedBy")
   featuredCreated      FeaturedContent[]  @relation("FeaturedCreatedBy")
   featuredRemoved      FeaturedContent[]  @relation("FeaturedRemovedBy")
+  blogPosts            BlogPost[]
   escalationsResolved  AdminEscalation[]  @relation("EscalationResolvedBy")
   
   // Bulk Import System (ADMIN only)
@@ -1262,6 +1264,50 @@ model FeaturedContent {
   @@index([entityId])
   @@index([isActive])
   @@index([startAt, endAt])
+}
+
+// =============================================================================
+// BLOG CONTENT SYSTEM
+// =============================================================================
+// County-scoped blog posts with featured images and SEO fields
+// =============================================================================
+
+enum BlogPostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model BlogPost {
+  id               String          @id @default(uuid())
+  countyId         String
+  title            String
+  slug             String
+  excerpt          String          @db.Text
+  content          String          @db.Text
+  featuredImageUrl String?
+  featuredImageAlt String?
+  category         String
+  tags             String[]        @default([])
+  status           BlogPostStatus  @default(DRAFT)
+  publishedAt      DateTime?
+  authorId         String?
+  metaTitle        String?
+  metaDescription  String?
+  isFeatured       Boolean         @default(false)
+  featuredOrder    Int?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  county           County          @relation(fields: [countyId], references: [id], onDelete: Cascade)
+  author           UserIdentity?   @relation(fields: [authorId], references: [id])
+
+  @@unique([countyId, slug])
+  @@index([countyId])
+  @@index([slug])
+  @@index([status])
+  @@index([publishedAt])
+  @@index([isFeatured, featuredOrder])
+  @@index([category])
 }
 
 enum FeaturedType {

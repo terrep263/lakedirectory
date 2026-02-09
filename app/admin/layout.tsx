@@ -40,6 +40,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           { href: '/admin/county', label: 'County Context', icon: '🗺️' },
           { href: '/admin/cities', label: 'Cities', icon: '🏙️' },
           { href: '/admin/featured', label: 'Featured', icon: '⭐' },
+          { href: '/admin/blog', label: 'Blog', icon: '📝' },
           { href: '/admin/founders', label: 'Founders', icon: '🏅' },
         ],
       },

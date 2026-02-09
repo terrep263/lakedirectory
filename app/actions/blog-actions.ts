@@ -4,9 +4,10 @@
  import { redirect } from 'next/navigation'
  import { headers } from 'next/headers'
  import { NextRequest } from 'next/server'
- import { resolveCountyFromDomain } from '@/lib/geography'
- import { prisma } from '@/lib/prisma'
- import { BlogPostStatus } from '@prisma/client'
+import { resolveCountyFromDomain } from '@/lib/geography'
+import { prisma } from '@/lib/prisma'
+import { BlogPostStatus } from '@prisma/client'
+import { generateAndPublishArticle } from '@/lib/ai-blog-generator'
 
 async function getCurrentCountyId(): Promise<string> {
   const headerStore = await headers()
@@ -215,17 +216,26 @@ async function getCurrentCountyId(): Promise<string> {
 export async function getAllBlogPostsAdmin() {
   const countyId = await getCurrentCountyId()
 
-  const posts = await prisma.blogPost.findMany({
-    where: { countyId },
-    orderBy: [{ createdAt: 'desc' }],
-    include: {
-      author: {
-        select: {
-          email: true,
+  const fetchPosts = () =>
+    prisma.blogPost.findMany({
+      where: { countyId },
+      orderBy: [{ createdAt: 'desc' }],
+      include: {
+        author: {
+          select: {
+            email: true,
+          },
         },
       },
-    },
-  })
+    })
+
+  let posts = await fetchPosts()
+
+  if (posts.length === 0) {
+    console.log('No blog posts found for county, generating AI article...')
+    await generateAndPublishArticle(countyId)
+    posts = await fetchPosts()
+  }
 
   return posts
 }
